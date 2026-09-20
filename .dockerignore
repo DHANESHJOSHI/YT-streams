@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.jpg
+*.png
+.env.local
+key.txt
+.wrangler

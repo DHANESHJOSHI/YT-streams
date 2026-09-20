@@ -55,6 +55,13 @@ export interface StartStreamOptions {
   rtmpServer: string;  // e.g. "rtmp://a.rtmp.youtube.com/live2"
   streamKey: string;   // e.g. "xxxx-xxxx-xxxx-xxxx"
   loop?: boolean;
+  overlayText?: string;
+  overlayXPct?: string | number;
+  overlayYPct?: string | number;
+  overlayColor?: string;
+  overlayFontsize?: string | number;
+  overlayTransform?: string;
+  overlayBox?: boolean | string;
 }
 
 function probeVideoCodec(videoSource: string): { videoCodec: string; isH264: boolean } {
@@ -119,12 +126,49 @@ export function startLiveStream(options: StartStreamOptions): { success: boolean
   // Input source
   args.push('-i', resolvedSource);
 
-  // Video encoding options:
-  // If source is already H.264, we can copy the video stream with 0% CPU!
-  if (isH264) {
+  // Check for OBS interactive text overlay
+  let hasText = !!options.overlayText && options.overlayText.trim().length > 0;
+  if (hasText) {
+    let text = options.overlayText!.trim();
+    const transform = String(options.overlayTransform || 'none').toLowerCase();
+    if (transform === 'uppercase') {
+      text = text.toUpperCase();
+    } else if (transform === 'lowercase') {
+      text = text.toLowerCase();
+    }
+
+    const xRatio = (parseFloat(String(options.overlayXPct ?? 50)) / 100).toFixed(4);
+    const yRatio = (parseFloat(String(options.overlayYPct ?? 12)) / 100).toFixed(4);
+    const color = options.overlayColor || 'yellow';
+    const size = parseInt(String(options.overlayFontsize ?? 48), 10) || 48;
+    const drawBox = String(options.overlayBox) !== 'false';
+
+    const fontCandidates = [
+      '/usr/share/fonts/ttf-dejavu/DejaVuSans-Bold.ttf',
+      '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
+      '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+      '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
+      '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf',
+    ];
+    const fontPath = fontCandidates.find(f => fs.existsSync(f)) || '';
+    const fontArg = fontPath ? `fontfile=${fontPath}:` : '';
+    const boxArg = drawBox ? ':box=1:boxcolor=black@0.65:boxborderw=14' : ':box=0';
+    const escaped = text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/:/g, '\\:');
+
+    args.push('-vf', `drawtext=${fontArg}text='${escaped}':x=(w-text_w)*${xRatio}:y=(h-text_h)*${yRatio}:fontsize=${size}:fontcolor=${color}${boxArg}`);
+    args.push(
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-tune', 'zerolatency',
+      '-pix_fmt', 'yuv420p',
+      '-b:v', '4500k',
+      '-maxrate', '6000k',
+      '-bufsize', '10000k',
+      '-g', '60'
+    );
+  } else if (isH264) {
     args.push('-c:v', 'copy');
   } else {
-    // If AV1, VP9, or unknown, transcode to high-quality H.264
     args.push(
       '-c:v', 'libx264',
       '-preset', 'veryfast',

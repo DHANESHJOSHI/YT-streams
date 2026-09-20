@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: fluid-live-streamer
+    runtime: docker
+    plan: free
+    region: oregon
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: APP_PASSWORD
+        value: fluidislive@2026
+      - key: R2_BUCKET_NAME
+        value: fluid-streams

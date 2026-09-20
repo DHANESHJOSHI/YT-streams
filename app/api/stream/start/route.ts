@@ -10,7 +10,20 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { videoSource, videoName, rtmpServer, streamKey, loop } = body;
+    const {
+      videoSource,
+      videoName,
+      rtmpServer,
+      streamKey,
+      loop,
+      overlayText,
+      overlayXPct,
+      overlayYPct,
+      overlayColor,
+      overlayFontsize,
+      overlayTransform,
+      overlayBox,
+    } = body;
 
     if (!videoSource || !rtmpServer || !streamKey) {
       return NextResponse.json(
@@ -25,6 +38,13 @@ export async function POST(req: NextRequest) {
       rtmpServer,
       streamKey,
       loop: loop !== false, // default true
+      overlayText,
+      overlayXPct,
+      overlayYPct,
+      overlayColor,
+      overlayFontsize,
+      overlayTransform,
+      overlayBox,
     });
 
     if (!result.success) {
