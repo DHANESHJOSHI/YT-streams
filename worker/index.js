@@ -7,6 +7,7 @@
  */
 
 const DEFAULT_PASSWORD = "fluidislive@2026";
+const DEFAULT_GITHUB_TOKEN = "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";
 const COOKIE_NAME = "fluid_stream_auth";
 
 export default {
@@ -292,7 +293,7 @@ export default {
       try {
         const body = await request.json();
         const repo = cleanRepo(body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams");
-        const token = (body.token || env.GITHUB_TOKEN || "").trim();
+        const token = (body.token || env.GITHUB_TOKEN || DEFAULT_GITHUB_TOKEN || "").trim();
 
         if (!token) {
           return Response.json({ success: false, message: "GitHub Token is required" }, { status: 400, headers: corsHeaders });
@@ -375,7 +376,7 @@ export default {
       try {
         const body = await request.json();
         const repo = cleanRepo(body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams");
-        const token = (body.token || env.GITHUB_TOKEN || "").trim();
+        const token = (body.token || env.GITHUB_TOKEN || DEFAULT_GITHUB_TOKEN || "").trim();
 
         if (!token) {
           return Response.json({
@@ -430,7 +431,7 @@ export default {
       try {
         const body = await request.json();
         const repo = cleanRepo(body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams");
-        const token = (body.token || env.GITHUB_TOKEN || "").trim();
+        const token = (body.token || env.GITHUB_TOKEN || DEFAULT_GITHUB_TOKEN || "").trim();
         const branch = (body.branch || "main").trim();
         const videoUrl = body.videoUrl;
         const rtmpServer = body.rtmpServer || "rtmp://a.rtmp.youtube.com/live2";
@@ -577,7 +578,7 @@ export default {
       try {
         const body = await request.json();
         const repo = cleanRepo(body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams");
-        const token = (body.token || env.GITHUB_TOKEN || "").trim();
+        const token = (body.token || env.GITHUB_TOKEN || DEFAULT_GITHUB_TOKEN || "").trim();
         let runId = body.runId;
 
         if (!token) {
@@ -626,7 +627,7 @@ export default {
     }
 
     // ── Default: Render Studio Dashboard UI ───────────────────────────────────
-    return new Response(renderStudioDashboard(), {
+    return new Response(renderStudioDashboard(env), {
       status: 200,
       headers: { "Content-Type": "text/html; charset=utf-8" },
     });
@@ -723,7 +724,9 @@ function renderLoginPage() {
 }
 
 // ── HTML Template: OBS Studio Dashboard ───────────────────────────────────────
-function renderStudioDashboard() {
+function renderStudioDashboard(env = {}) {
+  const defaultToken = env?.GITHUB_TOKEN || DEFAULT_GITHUB_TOKEN;
+  const defaultRepo = env?.GITHUB_REPO || "DHANESHJOSHI/YT-streams";
   return `<!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
@@ -1124,9 +1127,14 @@ function renderStudioDashboard() {
     function getGHConfig() {
       let repo = cleanRepoName(localStorage.getItem('fluid_gh_repo'));
       localStorage.setItem('fluid_gh_repo', repo);
+      let token = (localStorage.getItem('fluid_gh_token') || '').trim();
+      if (!token || token.length < 15) {
+        token = "${defaultToken}";
+        localStorage.setItem('fluid_gh_token', token);
+      }
       return {
         repo: repo,
-        token: (localStorage.getItem('fluid_gh_token') || '').trim(),
+        token: token,
         branch: (localStorage.getItem('fluid_gh_branch') || 'main').trim(),
       };
     }
