@@ -232,10 +232,10 @@ export function startLiveStream(options: StartStreamOptions): { success: boolean
       }
 
       // Check for stream connection success
-      if (activeStreamState.stats.status === 'connecting') {
-        if (line.includes('Stream #0') || line.includes('Output #0') || line.includes('frame=')) {
-          activeStreamState.stats.status = 'live';
-        }
+      if (line.includes('Stream #0') || line.includes('Output #0') || line.includes('frame=')) {
+        activeStreamState.stats.status = 'live';
+        activeStreamState.stats.isLive = true;
+        delete activeStreamState.stats.error;
       }
 
       // Regex parse frame stats: frame=  123 fps= 30.0 q=-1.0 size=    1234kB time=00:00:04.10 bitrate=2463.1kbits/s speed=1.00x
@@ -258,6 +258,7 @@ export function startLiveStream(options: StartStreamOptions): { success: boolean
 
     ffmpegProc.on('error', (err) => {
       console.error('[Streamer Error]:', err);
+      if (activeStreamState.process !== ffmpegProc) return;
       activeStreamState.stats.status = 'error';
       activeStreamState.stats.error = err.message;
       activeStreamState.stats.isLive = false;
@@ -266,6 +267,7 @@ export function startLiveStream(options: StartStreamOptions): { success: boolean
 
     ffmpegProc.on('close', (code) => {
       console.log(`[Streamer] Process exited with code ${code}`);
+      if (activeStreamState.process !== ffmpegProc) return;
       if (activeStreamState.stats.status !== 'stopped') {
         if (code === 0) {
           activeStreamState.stats.status = 'offline';
