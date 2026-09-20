@@ -123,7 +123,7 @@ export default function MediaLibrary({
 
       // 2. Upload file directly to Cloudflare R2 bucket with XMLHttpRequest for progress tracking
       const xhr = new XMLHttpRequest();
-      xhr.open('PUT', presignedData.uploadUrl, true);
+      xhr.open(presignedData.httpMethod || 'PUT', presignedData.uploadUrl, true);
       xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
 
       xhr.upload.onprogress = (e) => {

@@ -16,17 +16,18 @@ export interface R2Config {
 
 export function getR2Config(): R2Config {
   return {
-    accountId: process.env.R2_ACCOUNT_ID || '',
+    accountId: process.env.R2_ACCOUNT_ID || '897246136e2f1a0e2ecc4636e3112e49',
     accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
-    bucketName: process.env.R2_BUCKET_NAME || 'youtube-streams',
-    publicDomain: process.env.R2_PUBLIC_DOMAIN || '',
+    bucketName: process.env.R2_BUCKET_NAME || 'noni-clips',
+    publicDomain: process.env.R2_PUBLIC_DOMAIN || 'clips.techwithjoshi.in',
   };
 }
 
 export function isR2Configured(config?: Partial<R2Config>): boolean {
+  if (process.env.NONI_WORKER_URL) return true;
   const c = { ...getR2Config(), ...config };
-  return Boolean(c.accountId && c.accessKeyId && c.secretAccessKey && c.bucketName);
+  return Boolean(c.accountId && c.bucketName && (c.accessKeyId || process.env.NONI_WORKER_URL));
 }
 
 export function createR2Client(customConfig?: Partial<R2Config>): S3Client | null {
