@@ -376,7 +376,7 @@ export default {
       try {
         const body = await request.json();
         const repo = cleanRepo(body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams");
-        const token = (body.token || env.GITHUB_TOKEN || DEFAULT_GITHUB_TOKEN || "").trim();
+        let token = (body.token || env.GITHUB_TOKEN || DEFAULT_GITHUB_TOKEN || "").trim();
 
         if (!token) {
           return Response.json({
@@ -386,7 +386,7 @@ export default {
           }, { headers: corsHeaders });
         }
 
-        const ghRes = await fetch(
+        let ghRes = await fetch(
           `https://api.github.com/repos/${repo}/actions/runs?per_page=10`,
           {
             headers: {
@@ -397,9 +397,32 @@ export default {
           }
         );
 
+        // If client token failed with 401, auto-heal with server environment token
+        if (ghRes.status === 401 && (env.GITHUB_TOKEN || DEFAULT_GITHUB_TOKEN)) {
+          const fallbackTok = env.GITHUB_TOKEN || DEFAULT_GITHUB_TOKEN;
+          if (token !== fallbackTok) {
+            token = fallbackTok;
+            ghRes = await fetch(
+              `https://api.github.com/repos/${repo}/actions/runs?per_page=10`,
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  Accept: "application/vnd.github+json",
+                  "User-Agent": "FluidLiveStudio",
+                },
+              }
+            );
+          }
+        }
+
         if (!ghRes.ok) {
           const errText = await ghRes.text();
-          return Response.json({ isLive: false, error: errText }, { status: ghRes.status, headers: corsHeaders });
+          return Response.json({
+            isLive: false,
+            status: "idle",
+            error: errText,
+            tokenInvalid: ghRes.status === 401,
+          }, { status: 200, headers: corsHeaders });
         }
 
         const data = await ghRes.json();
@@ -1132,13 +1155,16 @@ function renderStudioDashboard(env = {}) {
     }
 
     // Load Saved GitHub Config from LocalStorage
+    const TOKEN_VERSION = '2026-v2';
     function getGHConfig() {
       let repo = cleanRepoName(localStorage.getItem('fluid_gh_repo'));
       localStorage.setItem('fluid_gh_repo', repo);
       let token = (localStorage.getItem('fluid_gh_token') || '').trim();
-      if (!token || token.length < 15) {
+      // Auto-migrate to user verified token if version mismatch or token empty
+      if (localStorage.getItem('fluid_gh_token_ver') !== TOKEN_VERSION || !token || token.length < 15) {
         token = "${defaultToken}";
         localStorage.setItem('fluid_gh_token', token);
+        localStorage.setItem('fluid_gh_token_ver', TOKEN_VERSION);
       }
       return {
         repo: repo,
@@ -1213,6 +1239,7 @@ function renderStudioDashboard(env = {}) {
       document.getElementById('ghRepoInput').value = repo;
       localStorage.setItem('fluid_gh_repo', repo);
       localStorage.setItem('fluid_gh_token', token);
+      localStorage.setItem('fluid_gh_token_ver', TOKEN_VERSION);
       localStorage.setItem('fluid_gh_branch', branch);
       closeConfigModal();
       checkCloudStreamStatus();
@@ -1231,6 +1258,11 @@ function renderStudioDashboard(env = {}) {
         });
         const data = await res.json();
 
+        if (data.tokenInvalid && cfg.token !== "${defaultToken}") {
+          localStorage.setItem('fluid_gh_token', "${defaultToken}");
+          localStorage.setItem('fluid_gh_token_ver', TOKEN_VERSION);
+        }
+
         if (data.isLive) {
           isLive = true;
           currentRunId = data.runId;
@@ -1242,7 +1274,7 @@ function renderStudioDashboard(env = {}) {
           }
         }
       } catch (e) {
-        console.warn('Status poll warning:', e);
+        // Silently ignore network poll glitches
       }
     }
 
@@ -1375,35 +1407,52 @@ function renderStudioDashboard(env = {}) {
           return;
         }
 
-        container.innerHTML = data.videos.map(v => \`
-          <div onclick="selectVideo('\${v.url}', '\${v.name}')" class="p-2.5 rounded-lg border \${selectedVideoUrl === v.url ? 'bg-blue-950/40 border-blue-500' : 'bg-[#151722] hover:bg-[#1c1f2d] border-[#202538]'} transition cursor-pointer flex items-center justify-between">
-            <div class="truncate mr-2">
-              <div class="text-xs font-semibold text-slate-200 truncate">\${v.name}</div>
-              <div class="text-[10px] text-slate-400 font-mono">\${(v.size / (1024*1024)).toFixed(1)} MB</div>
-            </div>
-            <button onclick="deleteVideo('\${v.key}', event)" class="text-xs text-slate-500 hover:text-red-400 p-1">🗑️</button>
-          </div>
-        \`).join('');
+        container.innerHTML = data.videos.map(function(v) {
+          var isSel = selectedVideoUrl === v.url;
+          var cls = isSel ? "bg-blue-950/40 border-blue-500" : "bg-[#151722] hover:bg-[#1c1f2d] border-[#202538]";
+          var mb = (v.size / (1024 * 1024)).toFixed(1) + " MB";
+          return '<div data-url="' + v.url + '" data-name="' + v.name + '" onclick="selectVideo(this.dataset.url, this.dataset.name, true)" class="p-2.5 rounded-lg border ' + cls + ' transition cursor-pointer flex items-center justify-between">' +
+            '<div class="truncate mr-2">' +
+              '<div class="text-xs font-semibold text-slate-200 truncate">' + v.name + '</div>' +
+              '<div class="text-[10px] text-slate-400 font-mono">' + mb + '</div>' +
+            '</div>' +
+            '<button data-key="' + v.key + '" onclick="deleteVideo(this.dataset.key, event)" class="text-xs text-slate-500 hover:text-red-400 p-1">🗑️</button>' +
+          '</div>';
+        }).join('');
 
         if (!selectedVideoUrl && data.videos.length > 0) {
-          selectVideo(data.videos[0].url, data.videos[0].name);
+          selectVideo(data.videos[0].url, data.videos[0].name, false);
         }
       } catch (e) {
         container.innerHTML = '<div class="text-center p-6 text-xs text-red-400">Failed to load videos</div>';
       }
     }
 
-    function selectVideo(url, name) {
+    function selectVideo(url, name, userTriggered = false) {
       selectedVideoUrl = url;
       selectedVideoName = name;
       document.getElementById('currentVideoTitle').innerText = '• ' + name;
       document.getElementById('emptyMonitor').classList.add('hidden');
       videoEl.classList.remove('hidden');
-      videoEl.src = url;
-      videoEl.play();
-      playBtn.innerText = '⏸';
+      if (videoEl.src !== url && !videoEl.src.endsWith(url)) {
+        videoEl.src = url;
+      }
+      if (userTriggered) {
+        videoEl.play().then(() => {
+          playBtn.innerText = '⏸';
+        }).catch(() => {
+          playBtn.innerText = '▶';
+        });
+      } else {
+        videoEl.muted = true;
+        document.getElementById('muteBtn').innerText = '🔇';
+        videoEl.play().then(() => {
+          playBtn.innerText = '⏸';
+        }).catch(() => {
+          playBtn.innerText = '▶';
+        });
+      }
       updateTextOverlay();
-      loadVideos();
     }
 
     let currentOverlayXPct = 50;
@@ -1716,8 +1765,11 @@ function renderStudioDashboard(env = {}) {
 
     function toggleVideoPlay() {
       if (videoEl.paused) {
-        videoEl.play();
-        playBtn.innerText = '⏸';
+        videoEl.play().then(() => {
+          playBtn.innerText = '⏸';
+        }).catch(() => {
+          playBtn.innerText = '▶';
+        });
       } else {
         videoEl.pause();
         playBtn.innerText = '▶';
