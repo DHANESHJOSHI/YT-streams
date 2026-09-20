@@ -7,7 +7,7 @@
  */
 
 const DEFAULT_PASSWORD = "fluidislive@2026";
-const DEFAULT_GITHUB_TOKEN = "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";
+const DEFAULT_GITHUB_TOKEN = "";
 const COOKIE_NAME = "fluid_stream_auth";
 
 export default {
