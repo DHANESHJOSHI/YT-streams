@@ -291,23 +291,24 @@ export function startLiveStream(options: StartStreamOptions): { success: boolean
 }
 
 export function stopLiveStream(): { success: boolean; message: string } {
-  if (!activeStreamState.process || activeStreamState.process.killed) {
-    activeStreamState.stats.isLive = false;
-    activeStreamState.stats.status = 'stopped';
-    return { success: true, message: 'No active stream running' };
-  }
-
   try {
+    if (activeStreamState.process && !activeStreamState.process.killed) {
+      try {
+        activeStreamState.process.kill('SIGKILL');
+      } catch {}
+      activeStreamState.process = null;
+    }
+
+    try {
+      execSync('pkill -9 ffmpeg || true');
+    } catch {}
+
     activeStreamState.stats.status = 'stopped';
     activeStreamState.stats.isLive = false;
-    activeStreamState.process.kill('SIGTERM');
-
-    setTimeout(() => {
-      if (activeStreamState.process && !activeStreamState.process.killed) {
-        activeStreamState.process.kill('SIGKILL');
-      }
-      activeStreamState.process = null;
-    }, 2000);
+    activeStreamState.stats.fps = 0;
+    activeStreamState.stats.bitrate = 'Offline';
+    activeStreamState.stats.speed = '0x';
+    delete activeStreamState.stats.error;
 
     return { success: true, message: 'Stream stopped successfully' };
   } catch (err: unknown) {
