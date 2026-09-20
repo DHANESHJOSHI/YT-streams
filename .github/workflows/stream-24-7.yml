@@ -17,10 +17,14 @@ on:
         description: 'Text overlay burnt onto video (OBS-style)'
         required: false
         default: ''
-      overlay_position:
-        description: 'Text Position (top, bottom, center)'
+      overlay_x_pct:
+        description: 'Text X Position Percentage (0-100)'
         required: false
-        default: 'top'
+        default: '50'
+      overlay_y_pct:
+        description: 'Text Y Position Percentage (0-100)'
+        required: false
+        default: '12'
       overlay_color:
         description: 'Text color (yellow, white, cyan, green, red)'
         required: false
@@ -29,6 +33,10 @@ on:
         description: 'Font size in px'
         required: false
         default: '48'
+      overlay_transform:
+        description: 'Text Transformation (none, uppercase, lowercase)'
+        required: false
+        default: 'none'
       overlay_box:
         description: 'Draw semi-transparent background box'
         required: false
@@ -53,9 +61,11 @@ jobs:
           STREAM_KEY="${{ github.event.inputs.stream_key || github.event.client_payload.stream_key }}"
 
           OVERLAY_TEXT="${{ github.event.inputs.overlay_text || github.event.client_payload.overlay_text }}"
-          OVERLAY_POS="${{ github.event.inputs.overlay_position || github.event.client_payload.overlay_position || 'top' }}"
+          OVERLAY_X="${{ github.event.inputs.overlay_x_pct || github.event.client_payload.overlay_x_pct || '50' }}"
+          OVERLAY_Y="${{ github.event.inputs.overlay_y_pct || github.event.client_payload.overlay_y_pct || '12' }}"
           OVERLAY_COLOR="${{ github.event.inputs.overlay_color || github.event.client_payload.overlay_color || 'yellow' }}"
           OVERLAY_SIZE="${{ github.event.inputs.overlay_fontsize || github.event.client_payload.overlay_fontsize || '48' }}"
+          OVERLAY_TRANSFORM="${{ github.event.inputs.overlay_transform || github.event.client_payload.overlay_transform || 'none' }}"
           OVERLAY_BOX="${{ github.event.inputs.overlay_box || github.event.client_payload.overlay_box || 'true' }}"
 
           if [ -z "$VIDEO_URL" ] || [ -z "$STREAM_KEY" ]; then
@@ -78,27 +88,34 @@ jobs:
               FONT_PATH="/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
             fi
 
-            # Determine Y position
-            if [ "$OVERLAY_POS" = "bottom" ]; then
-              Y_POS="h-text_h-90"
-            elif [ "$OVERLAY_POS" = "center" ]; then
-              Y_POS="(h-text_h)/2"
-            else
-              Y_POS="90"
+            # Text Transformation
+            if [ "$OVERLAY_TRANSFORM" = "uppercase" ]; then
+              OVERLAY_TEXT=$(echo "$OVERLAY_TEXT" | tr '[:lower:]' '[:upper:]')
+            elif [ "$OVERLAY_TRANSFORM" = "lowercase" ]; then
+              OVERLAY_TEXT=$(echo "$OVERLAY_TEXT" | tr '[:upper:]' '[:lower:]')
             fi
+
+            # Calculate normalized ratios from 0.0 to 1.0
+            X_RATIO=$(awk "BEGIN {printf \"%.4f\", $OVERLAY_X / 100}")
+            Y_RATIO=$(awk "BEGIN {printf \"%.4f\", $OVERLAY_Y / 100}")
 
             # Box background parameter
             if [ "$OVERLAY_BOX" = "true" ]; then
-              BOX_PARAM=":box=1:boxcolor=black@0.65:boxborderw=12"
+              BOX_PARAM=":box=1:boxcolor=black@0.65:boxborderw=14"
             else
               BOX_PARAM=":box=0"
             fi
 
-            # Escape colons and apostrophes for ffmpeg drawtext filter
-            ESCAPED_TEXT=$(echo "$OVERLAY_TEXT" | sed "s/'/\\\\'/g" | sed "s/:/\\\\:/g")
+            # Escape colons, backslashes, and apostrophes for ffmpeg drawtext filter
+            ESCAPED_TEXT=$(echo "$OVERLAY_TEXT" | sed "s/\\\\/\\\\\\\\/g" | sed "s/'/\\\\'/g" | sed "s/:/\\\\:/g")
 
-            echo "Applying OBS Text Overlay: '$OVERLAY_TEXT' (Pos: $OVERLAY_POS, Color: $OVERLAY_COLOR, Size: ${OVERLAY_SIZE}px)"
-            VF_ARGS="-vf drawtext=fontfile=${FONT_PATH}:text='${ESCAPED_TEXT}':x=(w-text_w)/2:y=${Y_POS}:fontsize=${OVERLAY_SIZE}:fontcolor=${OVERLAY_COLOR}${BOX_PARAM}"
+            echo "Applying OBS Interactive Text Overlay:"
+            echo "  Text: '$OVERLAY_TEXT'"
+            echo "  Coordinates: X=${OVERLAY_X}% (${X_RATIO}), Y=${OVERLAY_Y}% (${Y_RATIO})"
+            echo "  Style: Color=${OVERLAY_COLOR}, Size=${OVERLAY_SIZE}px, Box=${OVERLAY_BOX}"
+
+            # Exact relative position mapped to video width & height
+            VF_ARGS="-vf drawtext=fontfile=${FONT_PATH}:text='${ESCAPED_TEXT}':x=(w-text_w)*${X_RATIO}:y=(h-text_h)*${Y_RATIO}:fontsize=${OVERLAY_SIZE}:fontcolor=${OVERLAY_COLOR}${BOX_PARAM}"
           fi
 
           # Stream in infinite loop (-stream_loop -1) with standard YouTube Live settings

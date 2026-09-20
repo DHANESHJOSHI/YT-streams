@@ -160,7 +160,7 @@ export default {
     }
 
     // ── Direct R2 Video Upload (/api/upload/:filename) ────────────────────────
-    if (url.pathname.startsWith("/api/upload/") && (method === "PUT" || method === "POST")) {
+    if (url.pathname.startsWith("/api/upload/") && !url.pathname.startsWith("/api/upload/multipart/") && (method === "PUT" || method === "POST")) {
       const rawName = decodeURIComponent(url.pathname.replace("/api/upload/", ""));
       const sanitized = rawName.replace(/[^a-zA-Z0-9._-]/g, "_");
       const key = `videos/${Date.now()}_${sanitized}`;
@@ -370,9 +370,11 @@ export default {
                 rtmp_server: rtmpServer,
                 stream_key: streamKey,
                 overlay_text: body.overlayText || "",
-                overlay_position: body.overlayPosition || "top",
+                overlay_x_pct: String(body.overlayXPct ?? "50"),
+                overlay_y_pct: String(body.overlayYPct ?? "12"),
                 overlay_color: body.overlayColor || "yellow",
-                overlay_fontsize: body.overlayFontSize || "48",
+                overlay_fontsize: String(body.overlayFontSize || "48"),
+                overlay_transform: body.overlayTransform || "none",
                 overlay_box: body.overlayBox || "true",
               },
             }),
@@ -399,9 +401,11 @@ export default {
                     rtmp_server: rtmpServer,
                     stream_key: streamKey,
                     overlay_text: body.overlayText || "",
-                    overlay_position: body.overlayPosition || "top",
+                    overlay_x_pct: String(body.overlayXPct ?? "50"),
+                    overlay_y_pct: String(body.overlayYPct ?? "12"),
                     overlay_color: body.overlayColor || "yellow",
-                    overlay_fontsize: body.overlayFontSize || "48",
+                    overlay_fontsize: String(body.overlayFontSize || "48"),
+                    overlay_transform: body.overlayTransform || "none",
                     overlay_box: body.overlayBox || "true",
                   },
                 }),
@@ -697,12 +701,27 @@ function renderStudioDashboard() {
           <span class="text-[10px] font-mono px-2 py-0.5 bg-slate-800 text-slate-400 rounded">9:16 VERTICAL / 16:9</span>
         </div>
 
-        <div class="flex-1 min-h-[380px] bg-[#07080b] relative flex items-center justify-center p-2">
-          <div class="relative max-h-[480px] max-w-full flex items-center justify-center">
+        <div class="flex-1 min-h-[380px] bg-[#07080b] relative flex items-center justify-center p-2 overflow-hidden">
+          <div id="videoScreenContainer" class="relative max-h-[480px] max-w-full flex items-center justify-center select-none">
             <video id="previewVideo" playsinline loop class="max-h-[480px] w-auto max-w-full rounded-lg shadow-2xl object-contain border border-[#222738] hidden"></video>
-            <!-- OBS Real-Time Text Overlay Preview -->
-            <div id="textOverlayPreview" class="absolute pointer-events-none z-20 hidden transition-all duration-150 text-center">
-              <span id="overlayTextSpan" class="font-extrabold tracking-wide drop-shadow-lg inline-block"></span>
+
+            <!-- OBS Interactive Draggable & Resizable Transform Box -->
+            <div id="obsTransformContainer" class="absolute z-20 hidden select-none" style="left: 50%; top: 12%; transform: translate(-50%, -50%); cursor: move;">
+              <div id="obsBoundingBox" class="relative border-2 border-dashed border-red-500 rounded p-1.5 shadow-2xl bg-black/60 transition-colors">
+                <span id="overlayTextSpan" class="font-black tracking-wide inline-block whitespace-pre-wrap text-center leading-snug pointer-events-none select-none drop-shadow-md">
+                  🎵 Guess The Song! #shorts
+                </span>
+
+                <!-- 8 OBS Transform & Resize Handles -->
+                <div class="obs-handle handle-tl absolute -top-1.5 -left-1.5 w-3 h-3 bg-red-500 border border-white rounded-xs" style="cursor: nwse-resize;"></div>
+                <div class="obs-handle handle-tr absolute -top-1.5 -right-1.5 w-3 h-3 bg-red-500 border border-white rounded-xs" style="cursor: nesw-resize;"></div>
+                <div class="obs-handle handle-bl absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-red-500 border border-white rounded-xs" style="cursor: nesw-resize;"></div>
+                <div class="obs-handle handle-br absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-red-500 border border-white rounded-xs" style="cursor: nwse-resize;"></div>
+                <div class="obs-handle handle-t absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-red-500 border border-white rounded-xs" style="cursor: ns-resize;"></div>
+                <div class="obs-handle handle-b absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-red-500 border border-white rounded-xs" style="cursor: ns-resize;"></div>
+                <div class="obs-handle handle-l absolute top-1/2 -left-1.5 -translate-y-1/2 w-3 h-3 bg-red-500 border border-white rounded-xs" style="cursor: ew-resize;"></div>
+                <div class="obs-handle handle-r absolute top-1/2 -right-1.5 -translate-y-1/2 w-3 h-3 bg-red-500 border border-white rounded-xs" style="cursor: ew-resize;"></div>
+              </div>
             </div>
           </div>
           <div id="emptyMonitor" class="flex flex-col items-center justify-center text-center p-8">
@@ -767,13 +786,13 @@ function renderStudioDashboard() {
       </div>
     </div>
 
-    <!-- OBS Live Text Overlay Source (Stream Banner / Title) -->
+    <!-- OBS Text Transformation & Mouse Positioning Controls -->
     <div class="bg-[#11131a] rounded-xl border border-[#202434] p-4 shadow-xl mb-4">
       <div class="flex items-center justify-between pb-3 border-b border-[#202434] mb-3">
         <div class="flex items-center gap-2">
           <span class="text-sm">🔤</span>
-          <span class="text-xs font-bold uppercase tracking-wider text-slate-200">OBS Text Overlay (Banner / Stream Title)</span>
-          <span class="text-[10px] text-blue-400 font-mono bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">LIVE BURNT ON STREAM</span>
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-200">OBS Text Transformation & Mouse Positioning</span>
+          <span class="text-[10px] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">🖱️ DRAG & RESIZE WITH MOUSE</span>
         </div>
         <label class="flex items-center gap-2 cursor-pointer select-none">
           <input type="checkbox" id="overlayEnableToggle" checked onchange="updateTextOverlay()" class="rounded bg-[#0a0c13] border-slate-700 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5">
@@ -781,50 +800,85 @@ function renderStudioDashboard() {
         </label>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-        <!-- Text Input -->
-        <div class="md:col-span-6">
-          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Text Message (burns into video feed for YouTube Live)</label>
-          <input
-            type="text"
-            id="overlayTextInput"
-            placeholder="e.g. 🎵 Guess The Song! Comment Below 👇"
-            value="🎵 Guess The Song! #shorts"
-            oninput="updateTextOverlay()"
-            class="w-full px-3 py-2.5 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-semibold text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          >
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
+        <!-- Text Input with Live Transformation Buttons -->
+        <div class="md:col-span-8">
+          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Text Message (burns into YouTube Live stream)</label>
+          <div class="flex gap-2">
+            <input
+              type="text"
+              id="overlayTextInput"
+              placeholder="e.g. 🎵 Guess The Song! Comment Below 👇"
+              value="🎵 Guess The Song! #shorts"
+              oninput="updateTextOverlay()"
+              class="flex-1 px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-semibold text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+            <!-- Transformation buttons: UPPERCASE, lowercase, Capitalize, Normal -->
+            <div class="flex rounded-lg border border-[#262b3d] overflow-hidden bg-[#0a0c13]">
+              <button type="button" onclick="setTextTransform('uppercase')" id="btnUpper" class="px-2.5 py-1 text-[11px] font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition" title="UPPERCASE">AA</button>
+              <button type="button" onclick="setTextTransform('lowercase')" id="btnLower" class="px-2.5 py-1 text-[11px] font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition border-l border-[#262b3d]" title="lowercase">aa</button>
+              <button type="button" onclick="setTextTransform('capitalize')" id="btnCap" class="px-2.5 py-1 text-[11px] font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition border-l border-[#262b3d]" title="Capitalize">Aa</button>
+              <button type="button" onclick="setTextTransform('none')" id="btnNone" class="px-2.5 py-1 text-[11px] font-bold text-blue-400 bg-blue-950/60 border-l border-[#262b3d]" title="Normal">Normal</button>
+            </div>
+          </div>
         </div>
 
-        <!-- Position -->
-        <div class="md:col-span-2">
-          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Position</label>
-          <select id="overlayPositionSelect" onchange="updateTextOverlay()" class="w-full px-2.5 py-2.5 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs text-slate-200 focus:outline-none">
-            <option value="top" selected>Top (Header)</option>
-            <option value="center">Center</option>
-            <option value="bottom">Bottom (Ticker)</option>
-          </select>
-        </div>
-
-        <!-- Color -->
-        <div class="md:col-span-2">
+        <!-- Color Swatches -->
+        <div class="md:col-span-4">
           <label class="block text-[11px] font-semibold text-slate-400 mb-1">Text Color</label>
-          <select id="overlayColorSelect" onchange="updateTextOverlay()" class="w-full px-2.5 py-2.5 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs text-slate-200 focus:outline-none font-semibold">
-            <option value="yellow" selected style="color: #facc15;">🟡 Yellow (Shorts/Live)</option>
-            <option value="white" style="color: #ffffff;">⚪ White</option>
-            <option value="cyan" style="color: #06b6d4;">🔵 Cyan</option>
-            <option value="green" style="color: #22c55e;">🟢 Neon Green</option>
-            <option value="red" style="color: #ef4444;">🔴 Red</option>
-          </select>
+          <div class="flex items-center gap-1.5 pt-0.5">
+            <button type="button" onclick="setTextColor('yellow')" id="colBtn_yellow" class="w-7 h-7 rounded-lg border-2 border-yellow-400 bg-yellow-400 hover:scale-110 transition shadow cursor-pointer" title="Yellow"></button>
+            <button type="button" onclick="setTextColor('white')" id="colBtn_white" class="w-7 h-7 rounded-lg border border-slate-600 bg-white hover:scale-110 transition shadow cursor-pointer" title="White"></button>
+            <button type="button" onclick="setTextColor('cyan')" id="colBtn_cyan" class="w-7 h-7 rounded-lg border border-slate-600 bg-cyan-400 hover:scale-110 transition shadow cursor-pointer" title="Cyan"></button>
+            <button type="button" onclick="setTextColor('green')" id="colBtn_green" class="w-7 h-7 rounded-lg border border-slate-600 bg-green-500 hover:scale-110 transition shadow cursor-pointer" title="Neon Green"></button>
+            <button type="button" onclick="setTextColor('red')" id="colBtn_red" class="w-7 h-7 rounded-lg border border-slate-600 bg-red-500 hover:scale-110 transition shadow cursor-pointer" title="Red"></button>
+            <button type="button" onclick="setTextColor('magenta')" id="colBtn_magenta" class="w-7 h-7 rounded-lg border border-slate-600 bg-fuchsia-500 hover:scale-110 transition shadow cursor-pointer" title="Magenta"></button>
+            <button type="button" onclick="setTextColor('orange')" id="colBtn_orange" class="w-7 h-7 rounded-lg border border-slate-600 bg-orange-500 hover:scale-110 transition shadow cursor-pointer" title="Orange"></button>
+          </div>
         </div>
 
-        <!-- Font Size -->
-        <div class="md:col-span-2">
-          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Font Size</label>
-          <select id="overlayFontSizeSelect" onchange="updateTextOverlay()" class="w-full px-2.5 py-2.5 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs text-slate-200 focus:outline-none">
-            <option value="36">Medium (36px)</option>
-            <option value="48" selected>Large (48px)</option>
-            <option value="64">Extra Large (64px)</option>
-          </select>
+        <!-- Position Sliders & Size -->
+        <div class="md:col-span-4 flex flex-col justify-end">
+          <div class="flex justify-between text-[11px] font-medium text-slate-400 mb-1">
+            <span>Position X (Horizontal)</span>
+            <span id="posXLabel" class="font-mono text-blue-400 font-bold">50%</span>
+          </div>
+          <input type="range" id="posXSlider" min="5" max="95" value="50" oninput="setPosX(this.value)" class="w-full h-1.5 bg-[#252a3b] rounded-lg accent-blue-500 cursor-pointer">
+        </div>
+
+        <div class="md:col-span-4 flex flex-col justify-end">
+          <div class="flex justify-between text-[11px] font-medium text-slate-400 mb-1">
+            <span>Position Y (Vertical)</span>
+            <span id="posYLabel" class="font-mono text-blue-400 font-bold">12%</span>
+          </div>
+          <input type="range" id="posYSlider" min="5" max="95" value="12" oninput="setPosY(this.value)" class="w-full h-1.5 bg-[#252a3b] rounded-lg accent-blue-500 cursor-pointer">
+        </div>
+
+        <div class="md:col-span-4 flex flex-col justify-end">
+          <div class="flex justify-between text-[11px] font-medium text-slate-400 mb-1">
+            <span>Font Size (Scale)</span>
+            <span id="fontSizeLabel" class="font-mono text-blue-400 font-bold">48px</span>
+          </div>
+          <input type="range" id="fontSizeSlider" min="18" max="96" value="48" oninput="setFontSize(this.value)" class="w-full h-1.5 bg-[#252a3b] rounded-lg accent-blue-500 cursor-pointer">
+        </div>
+
+        <!-- Quick Alignments & Background Box Toggle -->
+        <div class="md:col-span-12 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#1e2233]">
+          <div class="flex items-center gap-2">
+            <span class="text-[11px] text-slate-400 font-semibold">Quick Align:</span>
+            <button type="button" onclick="quickAlign('top')" class="px-2.5 py-1 bg-[#161822] hover:bg-[#1f2333] border border-[#262b3d] rounded text-[11px] text-slate-300 font-medium transition cursor-pointer">⬆️ Top</button>
+            <button type="button" onclick="quickAlign('center')" class="px-2.5 py-1 bg-[#161822] hover:bg-[#1f2333] border border-[#262b3d] rounded text-[11px] text-slate-300 font-medium transition cursor-pointer">🎯 Center</button>
+            <button type="button" onclick="quickAlign('bottom')" class="px-2.5 py-1 bg-[#161822] hover:bg-[#1f2333] border border-[#262b3d] rounded text-[11px] text-slate-300 font-medium transition cursor-pointer">⬇️ Bottom</button>
+            <button type="button" onclick="quickAlign('centerX')" class="px-2.5 py-1 bg-[#161822] hover:bg-[#1f2333] border border-[#262b3d] rounded text-[11px] text-slate-300 font-medium transition cursor-pointer">↔️ Center X</button>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <label class="flex items-center gap-1.5 cursor-pointer text-[11px] text-slate-400">
+              <input type="checkbox" id="boxBgToggle" checked onchange="updateTextOverlay()" class="rounded bg-[#0a0c13] border-slate-700 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5">
+              <span>Dark Background Box</span>
+            </label>
+            <span class="text-[10px] font-mono text-slate-500">💡 Video par mouse se text ko drag karein ya red handles se resize karein!</span>
+          </div>
         </div>
       </div>
     </div>
@@ -1018,9 +1072,6 @@ function renderStudioDashboard() {
 
         const overlayEnabled = document.getElementById('overlayEnableToggle').checked;
         const overlayText = overlayEnabled ? document.getElementById('overlayTextInput').value.trim() : '';
-        const overlayPosition = document.getElementById('overlayPositionSelect').value;
-        const overlayColor = document.getElementById('overlayColorSelect').value;
-        const overlayFontSize = document.getElementById('overlayFontSizeSelect').value;
 
         btn.disabled = true;
         btn.innerText = "Dispatching Cloud Runner...";
@@ -1037,10 +1088,12 @@ function renderStudioDashboard() {
               rtmpServer: srv,
               streamKey: key,
               overlayText,
-              overlayPosition,
-              overlayColor,
-              overlayFontSize,
-              overlayBox: "true",
+              overlayXPct: currentOverlayXPct,
+              overlayYPct: currentOverlayYPct,
+              overlayFontSize: currentFontSize,
+              overlayColor: currentTextColor,
+              overlayTransform: currentTransform,
+              overlayBox: document.getElementById('boxBgToggle').checked ? "true" : "false",
             }),
           });
 
@@ -1123,23 +1176,122 @@ function renderStudioDashboard() {
       loadVideos();
     }
 
+    let currentOverlayXPct = 50;
+    let currentOverlayYPct = 12;
+    let currentFontSize = 48;
+    let currentTextColor = 'yellow';
+    let currentTransform = 'none';
+
+    let isDraggingText = false;
+    let isResizingText = false;
+    let activeHandle = null;
+    let startMouseX = 0;
+    let startMouseY = 0;
+    let startXPct = 50;
+    let startYPct = 12;
+    let startFontSize = 48;
+
+    function setTextTransform(t) {
+      currentTransform = t;
+      ['btnUpper', 'btnLower', 'btnCap', 'btnNone'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) {
+          b.className = b.className.replace('text-blue-400 bg-blue-950/60', 'text-slate-400');
+        }
+      });
+      const activeMap = { uppercase: 'btnUpper', lowercase: 'btnLower', capitalize: 'btnCap', none: 'btnNone' };
+      const activeBtn = document.getElementById(activeMap[t]);
+      if (activeBtn) {
+        activeBtn.className = activeBtn.className.replace('text-slate-400', 'text-blue-400 bg-blue-950/60');
+      }
+      updateTextOverlay();
+    }
+
+    function setTextColor(c) {
+      currentTextColor = c;
+      const colors = ['yellow', 'white', 'cyan', 'green', 'red', 'magenta', 'orange'];
+      colors.forEach(col => {
+        const btn = document.getElementById('colBtn_' + col);
+        if (btn) {
+          if (col === c) {
+            btn.classList.add('border-2', 'ring-2', 'ring-blue-400', 'scale-110');
+          } else {
+            btn.classList.remove('border-2', 'ring-2', 'ring-blue-400', 'scale-110');
+            btn.classList.add('border', 'border-slate-600');
+          }
+        }
+      });
+      updateTextOverlay();
+    }
+
+    function setPosX(val, updateSlider = true) {
+      currentOverlayXPct = parseInt(val, 10);
+      document.getElementById('posXLabel').innerText = currentOverlayXPct + '%';
+      if (updateSlider) document.getElementById('posXSlider').value = currentOverlayXPct;
+      applyTransformBoxPosition();
+    }
+
+    function setPosY(val, updateSlider = true) {
+      currentOverlayYPct = parseInt(val, 10);
+      document.getElementById('posYLabel').innerText = currentOverlayYPct + '%';
+      if (updateSlider) document.getElementById('posYSlider').value = currentOverlayYPct;
+      applyTransformBoxPosition();
+    }
+
+    function setFontSize(val) {
+      currentFontSize = parseInt(val, 10);
+      document.getElementById('fontSizeLabel').innerText = currentFontSize + 'px';
+      document.getElementById('fontSizeSlider').value = currentFontSize;
+      updateTextOverlay();
+    }
+
+    function quickAlign(type) {
+      if (type === 'top') {
+        setPosY(10);
+        setPosX(50);
+      } else if (type === 'center') {
+        setPosY(50);
+        setPosX(50);
+      } else if (type === 'bottom') {
+        setPosY(88);
+        setPosX(50);
+      } else if (type === 'centerX') {
+        setPosX(50);
+      }
+    }
+
+    function applyTransformBoxPosition() {
+      const box = document.getElementById('obsTransformContainer');
+      if (box) {
+        box.style.left = currentOverlayXPct + '%';
+        box.style.top = currentOverlayYPct + '%';
+      }
+    }
+
     function updateTextOverlay() {
       const enabled = document.getElementById('overlayEnableToggle').checked;
-      const text = document.getElementById('overlayTextInput').value;
-      const pos = document.getElementById('overlayPositionSelect').value;
-      const color = document.getElementById('overlayColorSelect').value;
-      const size = document.getElementById('overlayFontSizeSelect').value;
+      const rawText = document.getElementById('overlayTextInput').value;
+      const box = document.getElementById('obsTransformContainer');
+      const span = document.getElementById('overlayTextSpan');
+      const bounding = document.getElementById('obsBoundingBox');
+      const hasBox = document.getElementById('boxBgToggle').checked;
 
-      const previewDiv = document.getElementById('textOverlayPreview');
-      const textSpan = document.getElementById('overlayTextSpan');
-
-      if (!enabled || !text.trim() || !selectedVideoUrl) {
-        previewDiv.classList.add('hidden');
+      if (!enabled || !rawText.trim() || !selectedVideoUrl) {
+        if (box) box.classList.add('hidden');
         return;
       }
 
-      previewDiv.classList.remove('hidden');
-      textSpan.innerText = text;
+      if (box) box.classList.remove('hidden');
+
+      let displayText = rawText;
+      if (currentTransform === 'uppercase') {
+        displayText = rawText.toUpperCase();
+      } else if (currentTransform === 'lowercase') {
+        displayText = rawText.toLowerCase();
+      } else if (currentTransform === 'capitalize') {
+        displayText = rawText.replace(/\\b\\w/g, c => c.toUpperCase());
+      }
+      span.innerText = displayText;
 
       const colorMap = {
         yellow: '#facc15',
@@ -1147,39 +1299,89 @@ function renderStudioDashboard() {
         cyan: '#06b6d4',
         green: '#22c55e',
         red: '#ef4444',
+        magenta: '#d946ef',
+        orange: '#f97316',
       };
-      textSpan.style.color = colorMap[color] || '#facc15';
+      span.style.color = colorMap[currentTextColor] || '#facc15';
 
-      const scaleMap = {
-        '36': '13px',
-        '48': '17px',
-        '64': '22px',
-      };
-      textSpan.style.fontSize = scaleMap[size] || '17px';
+      // Scale preview font size based on video height
+      const videoH = videoEl.clientHeight || 450;
+      const scaledSize = Math.max(12, Math.round((currentFontSize / 720) * videoH * 0.9));
+      span.style.fontSize = scaledSize + 'px';
 
-      // Set Position over the video
-      previewDiv.className = 'absolute pointer-events-none z-20 px-4 py-1.5 transition-all duration-150 flex items-center justify-center';
-      if (pos === 'top') {
-        previewDiv.style.top = '14px';
-        previewDiv.style.bottom = 'auto';
-        previewDiv.style.left = '50%';
-        previewDiv.style.transform = 'translateX(-50%)';
-      } else if (pos === 'bottom') {
-        previewDiv.style.top = 'auto';
-        previewDiv.style.bottom = '14px';
-        previewDiv.style.left = '50%';
-        previewDiv.style.transform = 'translateX(-50%)';
+      if (hasBox) {
+        bounding.style.backgroundColor = 'rgba(0, 0, 0, 0.70)';
+        bounding.style.padding = '6px 14px';
+        bounding.style.borderRadius = '8px';
       } else {
-        previewDiv.style.top = '50%';
-        previewDiv.style.bottom = 'auto';
-        previewDiv.style.left = '50%';
-        previewDiv.style.transform = 'translate(-50%, -50%)';
+        bounding.style.backgroundColor = 'transparent';
+        bounding.style.padding = '4px 6px';
       }
 
-      textSpan.style.backgroundColor = 'rgba(0, 0, 0, 0.70)';
-      textSpan.style.padding = '5px 14px';
-      textSpan.style.borderRadius = '8px';
-      textSpan.style.border = '1px solid rgba(255, 255, 255, 0.15)';
+      applyTransformBoxPosition();
+    }
+
+    function initTextOverlayDragAndResize() {
+      const box = document.getElementById('obsTransformContainer');
+      if (!box) return;
+
+      // Mouse drag start
+      box.addEventListener('mousedown', (e) => {
+        if (e.target.classList.contains('obs-handle')) return;
+        e.preventDefault();
+        isDraggingText = true;
+        startMouseX = e.clientX;
+        startMouseY = e.clientY;
+        startXPct = currentOverlayXPct;
+        startYPct = currentOverlayYPct;
+        document.body.style.cursor = 'grabbing';
+      });
+
+      // Resize handles
+      box.querySelectorAll('.obs-handle').forEach(h => {
+        h.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          isResizingText = true;
+          activeHandle = h;
+          startMouseX = e.clientX;
+          startMouseY = e.clientY;
+          startFontSize = currentFontSize;
+        });
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (isDraggingText) {
+          const rect = videoEl.getBoundingClientRect();
+          if (!rect.width || !rect.height) return;
+
+          const deltaX = e.clientX - startMouseX;
+          const deltaY = e.clientY - startMouseY;
+
+          const newXPct = Math.max(5, Math.min(95, Math.round(startXPct + (deltaX / rect.width) * 100)));
+          const newYPct = Math.max(5, Math.min(95, Math.round(startYPct + (deltaY / rect.height) * 100)));
+
+          setPosX(newXPct, true);
+          setPosY(newYPct, true);
+        } else if (isResizingText && activeHandle) {
+          const deltaY = e.clientY - startMouseY;
+          let factor = 1;
+          if (activeHandle.classList.contains('handle-tl') || activeHandle.classList.contains('handle-t')) {
+            factor = -1;
+          }
+          const newSize = Math.max(18, Math.min(96, Math.round(startFontSize + deltaY * factor * 0.4)));
+          setFontSize(newSize);
+        }
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (isDraggingText || isResizingText) {
+          isDraggingText = false;
+          isResizingText = false;
+          activeHandle = null;
+          document.body.style.cursor = 'default';
+        }
+      });
     }
 
     async function uploadSelectedVideo(file) {
@@ -1326,8 +1528,17 @@ function renderStudioDashboard() {
       window.location.reload();
     }
 
+    // Sync video wrapper dimensions on video load/resize
+    videoEl.addEventListener('loadedmetadata', () => {
+      updateTextOverlay();
+    });
+    window.addEventListener('resize', () => {
+      updateTextOverlay();
+    });
+
     // Initial Load & Status Poll
     loadVideos();
+    initTextOverlayDragAndResize();
     checkCloudStreamStatus();
     pollInterval = setInterval(checkCloudStreamStatus, 4000);
   </script>
