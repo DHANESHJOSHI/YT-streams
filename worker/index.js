@@ -279,6 +279,67 @@ export default {
       return Response.json({ success: true }, { headers: corsHeaders });
     }
 
+    // ── RENDER 24/7 CLOUD STREAM CONTROLLER ──────────────────────────
+    const RENDER_BACKEND_URL = (env.RENDER_SERVICE_URL || "https://yt-cloud-streamer.onrender.com").replace(/\/$/, "");
+    const RENDER_SECRET = env.AUTH_SECRET || "fluid_secret_broadcast_stream_2026";
+    const RENDER_AUTH_COOKIE = "fluid_studio_auth=aed95b9af83bf5015b450c18ac1c9756652ec5acac58cf358f4ed2f7c84bfe1a";
+
+    // 1. Check Cloud Stream Status from Render
+    if (url.pathname === "/api/cloud/status" && (method === "GET" || method === "POST")) {
+      try {
+        const renderRes = await fetch(`${RENDER_BACKEND_URL}/api/stream/status`, {
+          headers: {
+            "Authorization": `Bearer ${RENDER_SECRET}`,
+            "Cookie": RENDER_AUTH_COOKIE,
+            "User-Agent": "FluidLiveStudioCloudflareWorker"
+          }
+        });
+        const data = await renderRes.json();
+        return Response.json(data, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ isLive: false, status: "offline", error: err.message }, { headers: corsHeaders });
+      }
+    }
+
+    // 2. Start Cloud Stream on Render
+    if (url.pathname === "/api/cloud/start" && method === "POST") {
+      try {
+        const body = await request.json();
+        const renderRes = await fetch(`${RENDER_BACKEND_URL}/api/stream/start`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${RENDER_SECRET}`,
+            "Cookie": RENDER_AUTH_COOKIE,
+            "User-Agent": "FluidLiveStudioCloudflareWorker"
+          },
+          body: JSON.stringify(body)
+        });
+        const data = await renderRes.json();
+        return Response.json(data, { status: renderRes.status, headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, message: "Failed to connect to Render: " + err.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
+    // 3. Stop Cloud Stream on Render
+    if (url.pathname === "/api/cloud/stop" && method === "POST") {
+      try {
+        const renderRes = await fetch(`${RENDER_BACKEND_URL}/api/stream/stop`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${RENDER_SECRET}`,
+            "Cookie": RENDER_AUTH_COOKIE,
+            "User-Agent": "FluidLiveStudioCloudflareWorker"
+          }
+        });
+        const data = await renderRes.json();
+        return Response.json(data, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, message: "Failed to stop stream: " + err.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
     // ── GITHUB ACTIONS 24/7 CLOUD STREAM CONTROLLER ──────────────────────────
     function cleanRepo(raw) {
       let r = (raw || "").trim().replace(/^https?:\/\/github\.com\//i, "").replace(/\.git$/i, "").trim();
@@ -980,17 +1041,17 @@ function renderStudioDashboard(env = {}) {
             <input
               type="text"
               id="overlayTextInput"
-              placeholder="e.g. 🎵 Guess The Song! Comment Below 👇"
-              value="🎵 Guess The Song! #shorts"
+              placeholder="e.g. GUESS THE SONG"
+              value="GUESS THE SONG"
               oninput="updateTextOverlay()"
               class="flex-1 px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-semibold text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
             <!-- Transformation buttons: UPPERCASE, lowercase, Capitalize, Normal -->
             <div class="flex rounded-lg border border-[#262b3d] overflow-hidden bg-[#0a0c13]">
-              <button type="button" onclick="setTextTransform('uppercase')" id="btnUpper" class="px-2.5 py-1 text-[11px] font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition" title="UPPERCASE">AA</button>
+              <button type="button" onclick="setTextTransform('uppercase')" id="btnUpper" class="px-2.5 py-1 text-[11px] font-bold text-blue-400 bg-blue-950/60 hover:text-white transition" title="UPPERCASE">AA</button>
               <button type="button" onclick="setTextTransform('lowercase')" id="btnLower" class="px-2.5 py-1 text-[11px] font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition border-l border-[#262b3d]" title="lowercase">aa</button>
               <button type="button" onclick="setTextTransform('capitalize')" id="btnCap" class="px-2.5 py-1 text-[11px] font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition border-l border-[#262b3d]" title="Capitalize">Aa</button>
-              <button type="button" onclick="setTextTransform('none')" id="btnNone" class="px-2.5 py-1 text-[11px] font-bold text-blue-400 bg-blue-950/60 border-l border-[#262b3d]" title="Normal">Normal</button>
+              <button type="button" onclick="setTextTransform('none')" id="btnNone" class="px-2.5 py-1 text-[11px] font-bold text-slate-400 border-l border-[#262b3d]" title="Normal">Normal</button>
             </div>
           </div>
         </div>
@@ -1245,40 +1306,116 @@ function renderStudioDashboard(env = {}) {
       checkCloudStreamStatus();
     }
 
-    // Check Cloud Stream Status from GitHub
-    async function checkCloudStreamStatus() {
-      const cfg = getGHConfig();
-      if (!cfg.token) return;
-
+    // Save and Load OBS Text Overlay Configuration in LocalStorage
+    function saveOverlayConfig() {
       try {
-        const res = await fetch('/api/github/status', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(cfg),
-        });
-        const data = await res.json();
+        const cfg = {
+          text: document.getElementById('overlayTextInput').value,
+          enabled: document.getElementById('overlayEnableToggle').checked,
+          box: document.getElementById('boxBgToggle').checked,
+          color: currentTextColor,
+          transform: currentTransform,
+          fontSize: currentFontSize,
+          xPct: currentOverlayXPct,
+          yPct: currentOverlayYPct,
+        };
+        localStorage.setItem('fluid_obs_overlay_config_v2', JSON.stringify(cfg));
+      } catch (e) {}
+    }
 
-        if (data.tokenInvalid && cfg.token !== "${defaultToken}") {
-          localStorage.setItem('fluid_gh_token', "${defaultToken}");
-          localStorage.setItem('fluid_gh_token_ver', TOKEN_VERSION);
+    function loadOverlayConfig() {
+      let cfg = {
+        text: "GUESS THE SONG",
+        enabled: true,
+        box: true,
+        color: "yellow",
+        transform: "uppercase",
+        fontSize: 48,
+        xPct: 50,
+        yPct: 12,
+      };
+      try {
+        const saved = localStorage.getItem('fluid_obs_overlay_config_v2');
+        if (saved) {
+          cfg = { ...cfg, ...JSON.parse(saved) };
         }
+      } catch (e) {}
 
+      document.getElementById('overlayTextInput').value = cfg.text || "GUESS THE SONG";
+      document.getElementById('overlayEnableToggle').checked = cfg.enabled !== false;
+      document.getElementById('boxBgToggle').checked = cfg.box !== false;
+      setTextColor(cfg.color || 'yellow');
+      setTextTransform(cfg.transform || 'uppercase');
+      setFontSize(cfg.fontSize || 48);
+      setPosX(cfg.xPct !== undefined ? cfg.xPct : 50, true);
+      setPosY(cfg.yPct !== undefined ? cfg.yPct : 12, true);
+    }
+
+    // Save and Load RTMP Ingest Configuration in LocalStorage
+    function saveRtmpConfig() {
+      try {
+        const cfg = {
+          rtmpServer: document.getElementById('rtmpServerInput').value.trim(),
+          streamKey: document.getElementById('streamKeyInput').value.trim(),
+          loop: document.getElementById('loopCheckbox').checked,
+        };
+        localStorage.setItem('fluid_rtmp_config_v2', JSON.stringify(cfg));
+      } catch (e) {}
+    }
+
+    function loadRtmpConfig() {
+      try {
+        const saved = localStorage.getItem('fluid_rtmp_config_v2');
+        if (saved) {
+          const cfg = JSON.parse(saved);
+          if (cfg.rtmpServer) document.getElementById('rtmpServerInput').value = cfg.rtmpServer;
+          if (cfg.streamKey) document.getElementById('streamKeyInput').value = cfg.streamKey;
+          if (cfg.loop !== undefined) document.getElementById('loopCheckbox').checked = cfg.loop;
+        } else {
+          document.getElementById('rtmpServerInput').value = "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app";
+          document.getElementById('streamKeyInput').value = "sk_us-west-2_cpeGVbgUMyQo_xEua4Had5SIZdSlcjkl68wCxh9pto7";
+        }
+      } catch (e) {}
+    }
+
+    // Check Live Stream Status from Render Cloud Streamer
+    async function checkCloudStreamStatus() {
+      try {
+        const res = await fetch('/api/cloud/status');
+        const data = await res.json();
         if (data.isLive) {
           isLive = true;
-          currentRunId = data.runId;
-          updateLiveUI(true, data.durationSeconds || 0, data.htmlUrl);
-        } else {
-          if (isLive) {
-            isLive = false;
-            updateLiveUI(false);
-          }
+          updateLiveUI(true, data.uptimeSeconds || 0, data.fps, data.bitrate);
+          return;
         }
-      } catch (e) {
-        // Silently ignore network poll glitches
+      } catch (e) {}
+
+      // If Render reports offline, check GitHub runner if configured
+      const cfg = getGHConfig();
+      if (cfg && cfg.token) {
+        try {
+          const res = await fetch('/api/github/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(cfg),
+          });
+          const data = await res.json();
+          if (data.isLive) {
+            isLive = true;
+            currentRunId = data.runId;
+            updateLiveUI(true, data.durationSeconds || 0);
+            return;
+          }
+        } catch (e) {}
+      }
+
+      if (isLive) {
+        isLive = false;
+        updateLiveUI(false);
       }
     }
 
-    function updateLiveUI(live, duration = 0, htmlUrl = null) {
+    function updateLiveUI(live, duration = 0, fps = null, bitrate = null) {
       const btn = document.getElementById('streamBtn');
       const badge = document.getElementById('liveBadge');
       const dot = document.getElementById('liveDot');
@@ -1292,7 +1429,7 @@ function renderStudioDashboard(env = {}) {
 
         badge.className = "flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wider transition-all border bg-red-500/15 border-red-500/40 text-red-400 glow-red";
         dot.className = "w-2 h-2 rounded-full bg-red-500 animate-ping";
-        text.innerText = "LIVE (CLOUD 24/7)";
+        text.innerText = fps ? ("LIVE (" + fps + " FPS)") : "LIVE (CLOUD 24/7)";
 
         const h = Math.floor(duration / 3600);
         const m = Math.floor((duration % 3600) / 60);
@@ -1312,12 +1449,6 @@ function renderStudioDashboard(env = {}) {
     // Toggle Stream Action directly from Web UI
     async function handleToggleStream() {
       const btn = document.getElementById('streamBtn');
-      const cfg = getGHConfig();
-
-      if (!cfg.token) {
-        openConfigModal();
-        return;
-      }
 
       if (!isLive) {
         const key = document.getElementById('streamKeyInput').value.trim();
@@ -1328,67 +1459,62 @@ function renderStudioDashboard(env = {}) {
           return;
         }
         if (!key) {
-          alert('Please enter your YouTube stream key!');
+          alert('Please enter your stream key!');
           return;
         }
+
+        saveRtmpConfig();
+        saveOverlayConfig();
 
         const overlayEnabled = document.getElementById('overlayEnableToggle').checked;
         const overlayText = overlayEnabled ? document.getElementById('overlayTextInput').value.trim() : '';
 
         btn.disabled = true;
-        btn.innerText = "Dispatching Cloud Runner...";
+        btn.innerText = "Starting 24/7 Cloud Stream...";
 
         try {
-          const res = await fetch('/api/github/start', {
+          // Primary Cloud Engine: Render
+          const res = await fetch('/api/cloud/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              repo: cfg.repo,
-              token: cfg.token,
-              branch: cfg.branch,
-              videoUrl: window.location.origin + selectedVideoUrl,
+              videoSource: window.location.origin + selectedVideoUrl,
+              videoName: selectedVideoName,
               rtmpServer: srv,
               streamKey: key,
+              loop: document.getElementById('loopCheckbox').checked,
               overlayText,
               overlayXPct: currentOverlayXPct,
               overlayYPct: currentOverlayYPct,
-              overlayFontSize: currentFontSize,
+              overlayFontsize: currentFontSize,
               overlayColor: currentTextColor,
               overlayTransform: currentTransform,
-              overlayBox: document.getElementById('boxBgToggle').checked ? "true" : "false",
+              overlayBox: document.getElementById('boxBgToggle').checked,
             }),
           });
 
           const data = await res.json();
-          if (!data.success) {
-            alert(data.message || 'Failed to trigger cloud stream');
-            btn.disabled = false;
-            btn.innerText = "Start Cloud Stream";
+          if (data.success) {
+            alert('🚀 24/7 Cloud Live Stream has been STARTED on Render Cloud! You can now turn off your PC.');
+            setTimeout(checkCloudStreamStatus, 2000);
             return;
           }
 
-          alert('🚀 24/7 Cloud Live Stream has been dispatched on GitHub Actions! You can now turn off your PC.');
-          setTimeout(checkCloudStreamStatus, 3000);
+          alert(data.message || 'Failed to trigger cloud stream');
+          btn.disabled = false;
+          btn.innerText = "Start Cloud Stream";
         } catch (e) {
           alert('Error starting cloud stream: ' + e.message);
           btn.disabled = false;
           btn.innerText = "Start Cloud Stream";
         }
       } else {
-        if (!confirm('Stop 24/7 live stream on YouTube?')) return;
+        if (!confirm('Stop 24/7 live stream?')) return;
         btn.disabled = true;
-        btn.innerText = "Stopping Cloud Runner...";
+        btn.innerText = "Stopping Cloud Stream...";
 
         try {
-          await fetch('/api/github/stop', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              repo: cfg.repo,
-              token: cfg.token,
-              runId: currentRunId,
-            }),
-          });
+          await fetch('/api/cloud/stop', { method: 'POST' });
           setTimeout(checkCloudStreamStatus, 2000);
         } catch (e) {
           alert('Error stopping cloud stream: ' + e.message);
@@ -1484,6 +1610,7 @@ function renderStudioDashboard(env = {}) {
         activeBtn.className = activeBtn.className.replace('text-slate-400', 'text-blue-400 bg-blue-950/60');
       }
       updateTextOverlay();
+      saveOverlayConfig();
     }
 
     function setTextColor(c) {
@@ -1501,6 +1628,7 @@ function renderStudioDashboard(env = {}) {
         }
       });
       updateTextOverlay();
+      saveOverlayConfig();
     }
 
     function setPosX(val, updateSlider = true) {
@@ -1508,6 +1636,7 @@ function renderStudioDashboard(env = {}) {
       document.getElementById('posXLabel').innerText = currentOverlayXPct + '%';
       if (updateSlider) document.getElementById('posXSlider').value = currentOverlayXPct;
       applyTransformBoxPosition();
+      saveOverlayConfig();
     }
 
     function setPosY(val, updateSlider = true) {
@@ -1515,6 +1644,7 @@ function renderStudioDashboard(env = {}) {
       document.getElementById('posYLabel').innerText = currentOverlayYPct + '%';
       if (updateSlider) document.getElementById('posYSlider').value = currentOverlayYPct;
       applyTransformBoxPosition();
+      saveOverlayConfig();
     }
 
     function setFontSize(val) {
@@ -1522,6 +1652,7 @@ function renderStudioDashboard(env = {}) {
       document.getElementById('fontSizeLabel').innerText = currentFontSize + 'px';
       document.getElementById('fontSizeSlider').value = currentFontSize;
       updateTextOverlay();
+      saveOverlayConfig();
     }
 
     function quickAlign(type) {
@@ -1537,6 +1668,7 @@ function renderStudioDashboard(env = {}) {
       } else if (type === 'centerX') {
         setPosX(50);
       }
+      saveOverlayConfig();
     }
 
     function applyTransformBoxPosition() {
@@ -1659,6 +1791,7 @@ function renderStudioDashboard(env = {}) {
           isResizingText = false;
           activeHandle = null;
           document.body.style.cursor = 'default';
+          saveOverlayConfig();
         }
       });
     }
@@ -1819,10 +1952,12 @@ function renderStudioDashboard(env = {}) {
     });
 
     // Initial Load & Status Poll
+    loadOverlayConfig();
+    loadRtmpConfig();
     loadVideos();
     initTextOverlayDragAndResize();
     checkCloudStreamStatus();
-    pollInterval = setInterval(checkCloudStreamStatus, 4000);
+    pollInterval = setInterval(checkCloudStreamStatus, 3500);
   </script>
 </body>
 </html>`;
