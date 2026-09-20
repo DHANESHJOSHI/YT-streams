@@ -6,7 +6,6 @@ on:
       video_url:
         description: 'Direct Cloudflare R2 Video URL (e.g. https://stream.techwithjoshi.in/video/...)'
         required: true
-        default: 'https://stream.techwithjoshi.in/video/videos/...'
       rtmp_server:
         description: 'YouTube RTMP Ingest Server'
         required: true
@@ -14,6 +13,27 @@ on:
       stream_key:
         description: 'YouTube Stream Key'
         required: true
+      overlay_text:
+        description: 'Text overlay burnt onto video (OBS-style)'
+        required: false
+        default: ''
+      overlay_position:
+        description: 'Text Position (top, bottom, center)'
+        required: false
+        default: 'top'
+      overlay_color:
+        description: 'Text color (yellow, white, cyan, green, red)'
+        required: false
+        default: 'yellow'
+      overlay_fontsize:
+        description: 'Font size in px'
+        required: false
+        default: '48'
+      overlay_box:
+        description: 'Draw semi-transparent background box'
+        required: false
+        default: 'true'
+
   repository_dispatch:
     types: [start_stream]
 
@@ -21,16 +41,22 @@ jobs:
   stream:
     runs-on: ubuntu-latest
     steps:
-      - name: Install FFmpeg
+      - name: Install FFmpeg & TrueType Fonts
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-freefont-ttf
 
-      - name: Stream Video from Cloudflare R2 to YouTube Live 24/7
+      - name: Stream Video with OBS Text Overlay to YouTube Live 24/7
         run: |
           VIDEO_URL="${{ github.event.inputs.video_url || github.event.client_payload.video_url }}"
           RTMP_SERVER="${{ github.event.inputs.rtmp_server || github.event.client_payload.rtmp_server || 'rtmp://a.rtmp.youtube.com/live2' }}"
           STREAM_KEY="${{ github.event.inputs.stream_key || github.event.client_payload.stream_key }}"
+
+          OVERLAY_TEXT="${{ github.event.inputs.overlay_text || github.event.client_payload.overlay_text }}"
+          OVERLAY_POS="${{ github.event.inputs.overlay_position || github.event.client_payload.overlay_position || 'top' }}"
+          OVERLAY_COLOR="${{ github.event.inputs.overlay_color || github.event.client_payload.overlay_color || 'yellow' }}"
+          OVERLAY_SIZE="${{ github.event.inputs.overlay_fontsize || github.event.client_payload.overlay_fontsize || '48' }}"
+          OVERLAY_BOX="${{ github.event.inputs.overlay_box || github.event.client_payload.overlay_box || 'true' }}"
 
           if [ -z "$VIDEO_URL" ] || [ -z "$STREAM_KEY" ]; then
             echo "Error: Video URL or Stream Key is missing."
@@ -38,11 +64,46 @@ jobs:
           fi
 
           RTMP_DEST="${RTMP_SERVER%/}/${STREAM_KEY}"
-          echo "Starting 24/7 Cloud RTMP Stream..."
+          echo "=========================================="
+          echo "Starting 24/7 Cloud RTMP Stream"
           echo "Video Source: $VIDEO_URL"
+          echo "RTMP Ingest:  $RTMP_SERVER"
+          echo "=========================================="
 
-          # Stream in infinite loop (-stream_loop -1) with AAC 192k audio
+          # Configure OBS-style text overlay filter if text is provided
+          VF_ARGS=""
+          if [ -n "$OVERLAY_TEXT" ]; then
+            FONT_PATH="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            if [ ! -f "$FONT_PATH" ]; then
+              FONT_PATH="/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
+            fi
+
+            # Determine Y position
+            if [ "$OVERLAY_POS" = "bottom" ]; then
+              Y_POS="h-text_h-90"
+            elif [ "$OVERLAY_POS" = "center" ]; then
+              Y_POS="(h-text_h)/2"
+            else
+              Y_POS="90"
+            fi
+
+            # Box background parameter
+            if [ "$OVERLAY_BOX" = "true" ]; then
+              BOX_PARAM=":box=1:boxcolor=black@0.65:boxborderw=12"
+            else
+              BOX_PARAM=":box=0"
+            fi
+
+            # Escape colons and apostrophes for ffmpeg drawtext filter
+            ESCAPED_TEXT=$(echo "$OVERLAY_TEXT" | sed "s/'/\\\\'/g" | sed "s/:/\\\\:/g")
+
+            echo "Applying OBS Text Overlay: '$OVERLAY_TEXT' (Pos: $OVERLAY_POS, Color: $OVERLAY_COLOR, Size: ${OVERLAY_SIZE}px)"
+            VF_ARGS="-vf drawtext=fontfile=${FONT_PATH}:text='${ESCAPED_TEXT}':x=(w-text_w)/2:y=${Y_POS}:fontsize=${OVERLAY_SIZE}:fontcolor=${OVERLAY_COLOR}${BOX_PARAM}"
+          fi
+
+          # Stream in infinite loop (-stream_loop -1) with standard YouTube Live settings
           ffmpeg -re -stream_loop -1 -i "$VIDEO_URL" \
+            $VF_ARGS \
             -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -b:v 5000k -maxrate 6500k -bufsize 12000k -g 60 \
             -c:a aac -b:a 192k -ar 44100 \
             -f flv -flvflags no_duration_filesize \

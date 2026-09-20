@@ -40,7 +40,11 @@ export default {
     // ── Authentication Helpers ────────────────────────────────────────────────
     const password = env.APP_PASSWORD || DEFAULT_PASSWORD;
     const cookieHeader = request.headers.get("Cookie") || "";
-    const isAuthenticated = cookieHeader.includes(`${COOKIE_NAME}=authenticated_2026`);
+    const authHeader = request.headers.get("Authorization") || "";
+    const isAuthenticated =
+      cookieHeader.includes(`${COOKIE_NAME}=authenticated_2026`) ||
+      authHeader === `Bearer ${password}` ||
+      authHeader === password;
 
     // ── Auth API: Login ───────────────────────────────────────────────────────
     if (url.pathname === "/api/auth/login" && method === "POST") {
@@ -177,6 +181,94 @@ export default {
       }, { headers: corsHeaders });
     }
 
+    // ── Multipart Upload for Large Files (>50MB up to 5TB) ────────────────────
+    // 1. Start Multipart Upload
+    if (url.pathname === "/api/upload/multipart/create" && method === "POST") {
+      try {
+        const body = await request.json();
+        const rawName = body.filename || "video.mp4";
+        const sanitized = rawName.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const key = body.customKey || `videos/${Date.now()}_${sanitized}`;
+        const contentType = body.contentType || "video/mp4";
+
+        if (!env.STREAM_BUCKET) {
+          return Response.json({ success: false, message: "Bucket not configured" }, { status: 500, headers: corsHeaders });
+        }
+
+        const upload = await env.STREAM_BUCKET.createMultipartUpload(key, {
+          httpMetadata: { contentType },
+        });
+
+        return Response.json({
+          success: true,
+          uploadId: upload.uploadId,
+          key: upload.key,
+        }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, error: err.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
+    // 2. Upload Part
+    if (url.pathname === "/api/upload/multipart/part" && method === "PUT") {
+      try {
+        const uploadId = url.searchParams.get("uploadId");
+        const key = url.searchParams.get("key");
+        const partNumber = parseInt(url.searchParams.get("partNumber"), 10);
+
+        if (!uploadId || !key || isNaN(partNumber)) {
+          return Response.json({ success: false, message: "Missing uploadId, key, or partNumber" }, { status: 400, headers: corsHeaders });
+        }
+
+        const upload = env.STREAM_BUCKET.resumeMultipartUpload(key, uploadId);
+        const part = await upload.uploadPart(partNumber, request.body);
+
+        return Response.json({
+          success: true,
+          partNumber: part.partNumber,
+          etag: part.etag,
+        }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, error: err.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
+    // 3. Complete Multipart Upload
+    if (url.pathname === "/api/upload/multipart/complete" && method === "POST") {
+      try {
+        const body = await request.json();
+        const { uploadId, key, parts } = body;
+
+        if (!uploadId || !key || !parts || !Array.isArray(parts)) {
+          return Response.json({ success: false, message: "Missing uploadId, key, or parts array" }, { status: 400, headers: corsHeaders });
+        }
+
+        const upload = env.STREAM_BUCKET.resumeMultipartUpload(key, uploadId);
+        const obj = await upload.complete(parts);
+
+        return Response.json({
+          success: true,
+          key: obj.key,
+          url: `/video/${encodeURIComponent(obj.key)}`,
+        }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, error: err.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
+    // 4. Abort Multipart Upload
+    if (url.pathname === "/api/upload/multipart/abort" && method === "POST") {
+      try {
+        const body = await request.json();
+        const { uploadId, key } = body;
+        const upload = env.STREAM_BUCKET.resumeMultipartUpload(key, uploadId);
+        await upload.abort();
+        return Response.json({ success: true }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, error: err.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
     // ── Delete Video from R2 (/api/delete/:filename) ──────────────────────────
     if (url.pathname.startsWith("/api/delete/") && (method === "POST" || method === "DELETE")) {
       const key = decodeURIComponent(url.pathname.replace("/api/delete/", ""));
@@ -277,6 +369,11 @@ export default {
                 video_url: videoUrl,
                 rtmp_server: rtmpServer,
                 stream_key: streamKey,
+                overlay_text: body.overlayText || "",
+                overlay_position: body.overlayPosition || "top",
+                overlay_color: body.overlayColor || "yellow",
+                overlay_fontsize: body.overlayFontSize || "48",
+                overlay_box: body.overlayBox || "true",
               },
             }),
           }
@@ -301,6 +398,11 @@ export default {
                     video_url: videoUrl,
                     rtmp_server: rtmpServer,
                     stream_key: streamKey,
+                    overlay_text: body.overlayText || "",
+                    overlay_position: body.overlayPosition || "top",
+                    overlay_color: body.overlayColor || "yellow",
+                    overlay_fontsize: body.overlayFontSize || "48",
+                    overlay_box: body.overlayBox || "true",
                   },
                 }),
               }
@@ -596,7 +698,13 @@ function renderStudioDashboard() {
         </div>
 
         <div class="flex-1 min-h-[380px] bg-[#07080b] relative flex items-center justify-center p-2">
-          <video id="previewVideo" playsinline loop class="max-h-[480px] w-auto max-w-full rounded-lg shadow-2xl object-contain border border-[#222738] hidden"></video>
+          <div class="relative max-h-[480px] max-w-full flex items-center justify-center">
+            <video id="previewVideo" playsinline loop class="max-h-[480px] w-auto max-w-full rounded-lg shadow-2xl object-contain border border-[#222738] hidden"></video>
+            <!-- OBS Real-Time Text Overlay Preview -->
+            <div id="textOverlayPreview" class="absolute pointer-events-none z-20 hidden transition-all duration-150 text-center">
+              <span id="overlayTextSpan" class="font-extrabold tracking-wide drop-shadow-lg inline-block"></span>
+            </div>
+          </div>
           <div id="emptyMonitor" class="flex flex-col items-center justify-center text-center p-8">
             <div class="w-16 h-16 rounded-2xl bg-[#141722] border border-[#262b3d] flex items-center justify-center mb-4 text-3xl">🎬</div>
             <h3 class="text-sm font-semibold text-slate-300">Select a Video to Preview</h3>
@@ -655,6 +763,68 @@ function renderStudioDashboard() {
           <p class="text-[10px] text-slate-500">
             Stream runs 100% in the cloud via GitHub Actions from Cloudflare R2 bucket <strong>fluid-streams</strong>. You can safely turn off your PC!
           </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- OBS Live Text Overlay Source (Stream Banner / Title) -->
+    <div class="bg-[#11131a] rounded-xl border border-[#202434] p-4 shadow-xl mb-4">
+      <div class="flex items-center justify-between pb-3 border-b border-[#202434] mb-3">
+        <div class="flex items-center gap-2">
+          <span class="text-sm">🔤</span>
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-200">OBS Text Overlay (Banner / Stream Title)</span>
+          <span class="text-[10px] text-blue-400 font-mono bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">LIVE BURNT ON STREAM</span>
+        </div>
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="overlayEnableToggle" checked onchange="updateTextOverlay()" class="rounded bg-[#0a0c13] border-slate-700 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5">
+          <span class="text-xs text-slate-300 font-semibold">Enable Text on Video</span>
+        </label>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+        <!-- Text Input -->
+        <div class="md:col-span-6">
+          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Text Message (burns into video feed for YouTube Live)</label>
+          <input
+            type="text"
+            id="overlayTextInput"
+            placeholder="e.g. 🎵 Guess The Song! Comment Below 👇"
+            value="🎵 Guess The Song! #shorts"
+            oninput="updateTextOverlay()"
+            class="w-full px-3 py-2.5 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-semibold text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          >
+        </div>
+
+        <!-- Position -->
+        <div class="md:col-span-2">
+          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Position</label>
+          <select id="overlayPositionSelect" onchange="updateTextOverlay()" class="w-full px-2.5 py-2.5 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs text-slate-200 focus:outline-none">
+            <option value="top" selected>Top (Header)</option>
+            <option value="center">Center</option>
+            <option value="bottom">Bottom (Ticker)</option>
+          </select>
+        </div>
+
+        <!-- Color -->
+        <div class="md:col-span-2">
+          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Text Color</label>
+          <select id="overlayColorSelect" onchange="updateTextOverlay()" class="w-full px-2.5 py-2.5 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs text-slate-200 focus:outline-none font-semibold">
+            <option value="yellow" selected style="color: #facc15;">🟡 Yellow (Shorts/Live)</option>
+            <option value="white" style="color: #ffffff;">⚪ White</option>
+            <option value="cyan" style="color: #06b6d4;">🔵 Cyan</option>
+            <option value="green" style="color: #22c55e;">🟢 Neon Green</option>
+            <option value="red" style="color: #ef4444;">🔴 Red</option>
+          </select>
+        </div>
+
+        <!-- Font Size -->
+        <div class="md:col-span-2">
+          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Font Size</label>
+          <select id="overlayFontSizeSelect" onchange="updateTextOverlay()" class="w-full px-2.5 py-2.5 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs text-slate-200 focus:outline-none">
+            <option value="36">Medium (36px)</option>
+            <option value="48" selected>Large (48px)</option>
+            <option value="64">Extra Large (64px)</option>
+          </select>
         </div>
       </div>
     </div>
@@ -846,6 +1016,12 @@ function renderStudioDashboard() {
           return;
         }
 
+        const overlayEnabled = document.getElementById('overlayEnableToggle').checked;
+        const overlayText = overlayEnabled ? document.getElementById('overlayTextInput').value.trim() : '';
+        const overlayPosition = document.getElementById('overlayPositionSelect').value;
+        const overlayColor = document.getElementById('overlayColorSelect').value;
+        const overlayFontSize = document.getElementById('overlayFontSizeSelect').value;
+
         btn.disabled = true;
         btn.innerText = "Dispatching Cloud Runner...";
 
@@ -860,6 +1036,11 @@ function renderStudioDashboard() {
               videoUrl: window.location.origin + selectedVideoUrl,
               rtmpServer: srv,
               streamKey: key,
+              overlayText,
+              overlayPosition,
+              overlayColor,
+              overlayFontSize,
+              overlayBox: "true",
             }),
           });
 
@@ -938,10 +1119,70 @@ function renderStudioDashboard() {
       videoEl.src = url;
       videoEl.play();
       playBtn.innerText = '⏸';
+      updateTextOverlay();
       loadVideos();
     }
 
-    function uploadSelectedVideo(file) {
+    function updateTextOverlay() {
+      const enabled = document.getElementById('overlayEnableToggle').checked;
+      const text = document.getElementById('overlayTextInput').value;
+      const pos = document.getElementById('overlayPositionSelect').value;
+      const color = document.getElementById('overlayColorSelect').value;
+      const size = document.getElementById('overlayFontSizeSelect').value;
+
+      const previewDiv = document.getElementById('textOverlayPreview');
+      const textSpan = document.getElementById('overlayTextSpan');
+
+      if (!enabled || !text.trim() || !selectedVideoUrl) {
+        previewDiv.classList.add('hidden');
+        return;
+      }
+
+      previewDiv.classList.remove('hidden');
+      textSpan.innerText = text;
+
+      const colorMap = {
+        yellow: '#facc15',
+        white: '#ffffff',
+        cyan: '#06b6d4',
+        green: '#22c55e',
+        red: '#ef4444',
+      };
+      textSpan.style.color = colorMap[color] || '#facc15';
+
+      const scaleMap = {
+        '36': '13px',
+        '48': '17px',
+        '64': '22px',
+      };
+      textSpan.style.fontSize = scaleMap[size] || '17px';
+
+      // Set Position over the video
+      previewDiv.className = 'absolute pointer-events-none z-20 px-4 py-1.5 transition-all duration-150 flex items-center justify-center';
+      if (pos === 'top') {
+        previewDiv.style.top = '14px';
+        previewDiv.style.bottom = 'auto';
+        previewDiv.style.left = '50%';
+        previewDiv.style.transform = 'translateX(-50%)';
+      } else if (pos === 'bottom') {
+        previewDiv.style.top = 'auto';
+        previewDiv.style.bottom = '14px';
+        previewDiv.style.left = '50%';
+        previewDiv.style.transform = 'translateX(-50%)';
+      } else {
+        previewDiv.style.top = '50%';
+        previewDiv.style.bottom = 'auto';
+        previewDiv.style.left = '50%';
+        previewDiv.style.transform = 'translate(-50%, -50%)';
+      }
+
+      textSpan.style.backgroundColor = 'rgba(0, 0, 0, 0.70)';
+      textSpan.style.padding = '5px 14px';
+      textSpan.style.borderRadius = '8px';
+      textSpan.style.border = '1px solid rgba(255, 255, 255, 0.15)';
+    }
+
+    async function uploadSelectedVideo(file) {
       if (!file) return;
       const progressContainer = document.getElementById('uploadProgressContainer');
       const progressBar = document.getElementById('uploadProgressBar');
@@ -951,6 +1192,65 @@ function renderStudioDashboard() {
       progressBar.style.width = '0%';
       percentText.innerText = '0%';
 
+      // Large file multipart upload (> 40MB)
+      if (file.size > 40 * 1024 * 1024) {
+        try {
+          const createRes = await fetch('/api/upload/multipart/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: file.name, contentType: file.type || 'video/mp4' })
+          });
+          const createData = await createRes.json();
+          if (!createData.success) throw new Error(createData.error || 'Init failed');
+
+          const { uploadId, key } = createData;
+          const chunkSize = 20 * 1024 * 1024; // 20 MB chunks
+          const totalChunks = Math.ceil(file.size / chunkSize);
+          const parts = [];
+
+          for (let i = 0; i < totalChunks; i++) {
+            const start = i * chunkSize;
+            const end = Math.min(file.size, start + chunkSize);
+            const chunk = file.slice(start, end);
+            const partNum = i + 1;
+
+            const pct = Math.round((start / file.size) * 100);
+            progressBar.style.width = pct + '%';
+            percentText.innerText = pct + '% (' + partNum + '/' + totalChunks + ')';
+
+            const partRes = await fetch('/api/upload/multipart/part?uploadId=' + encodeURIComponent(uploadId) + '&key=' + encodeURIComponent(key) + '&partNumber=' + partNum, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/octet-stream' },
+              body: chunk
+            });
+            const partData = await partRes.json();
+            if (!partData.success) throw new Error('Part ' + partNum + ' error: ' + partData.error);
+            parts.push({ partNumber: partData.partNumber, etag: partData.etag });
+          }
+
+          percentText.innerText = 'Finalizing...';
+          progressBar.style.width = '100%';
+
+          const compRes = await fetch('/api/upload/multipart/complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uploadId, key, parts })
+          });
+          const compData = await compRes.json();
+          if (!compData.success) throw new Error(compData.error || 'Completion failed');
+
+          progressContainer.classList.add('hidden');
+          await loadVideos();
+          selectVideo(compData.url, file.name);
+          return;
+        } catch (e) {
+          progressContainer.classList.add('hidden');
+          alert('Upload failed: ' + e.message);
+          return;
+        }
+      }
+
+      // Small file upload
       const xhr = new XMLHttpRequest();
       xhr.open('PUT', '/api/upload/' + encodeURIComponent(file.name), true);
       xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
