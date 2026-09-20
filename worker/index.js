@@ -3,6 +3,7 @@
  * Domain: stream.techwithjoshi.in
  * Bucket: fluid-streams
  * Password: fluidislive@2026
+ * 24/7 Cloud Streaming via GitHub Actions (Zero PC required)
  */
 
 const DEFAULT_PASSWORD = "fluidislive@2026";
@@ -20,7 +21,7 @@ export default {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-GitHub-Token, X-GitHub-Repo",
         },
       });
     }
@@ -28,7 +29,7 @@ export default {
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-GitHub-Token, X-GitHub-Repo",
     };
 
     // ── Health Check ──────────────────────────────────────────────────────────
@@ -94,7 +95,7 @@ export default {
       headers.set("Access-Control-Allow-Origin", "*");
       headers.set("Accept-Ranges", "bytes");
 
-      // Handle Range Requests for smooth seeking
+      // Handle Range Requests for smooth seeking and audio playback
       const range = request.headers.get("Range");
       if (range) {
         const rangeMatch = range.match(/^bytes=(\d+)-(\d+)?$/);
@@ -130,7 +131,6 @@ export default {
 
     // ── Protected API Endpoints ───────────────────────────────────────────────
     if (!isAuthenticated) {
-      // Serve Login HTML Page
       return new Response(renderLoginPage(), {
         status: 200,
         headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -186,46 +186,198 @@ export default {
       return Response.json({ success: true }, { headers: corsHeaders });
     }
 
-    // ── Cloud Stream State & Trigger (/api/stream/start, stop, status) ────────
-    // We store active stream info in Cloudflare KV or in-memory
-    if (url.pathname === "/api/stream/start" && method === "POST") {
-      const body = await request.json();
-      const streamInfo = {
-        isLive: true,
-        startedAt: Date.now(),
-        videoUrl: body.videoUrl,
-        videoName: body.videoName,
-        rtmpServer: body.rtmpServer,
-        streamKeyMasked: body.streamKey ? `${body.streamKey.slice(0, 4)}••••••••` : "••••••••",
-        loop: body.loop !== false,
-      };
+    // ── GITHUB ACTIONS 24/7 CLOUD STREAM CONTROLLER ──────────────────────────
+    // 1. Check Status of GitHub Actions Streamer
+    if (url.pathname === "/api/github/status" && method === "POST") {
+      try {
+        const body = await request.json();
+        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/fluid-live-studio").trim();
+        const token = (body.token || env.GITHUB_TOKEN || "").trim();
 
-      // Forward to Cloud Runner if configured, or record status
-      if (env.CLOUD_RUNNER_URL) {
-        try {
-          await fetch(`${env.CLOUD_RUNNER_URL}/start`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.RUNNER_SECRET || ""}` },
-            body: JSON.stringify(body),
-          });
-        } catch (e) {
-          console.warn("Runner dispatch notice:", e.message);
+        if (!token) {
+          return Response.json({
+            isLive: false,
+            needsConfig: true,
+            message: "GitHub Token required to control 24/7 cloud streamer",
+          }, { headers: corsHeaders });
         }
-      }
 
-      return Response.json({ success: true, message: "Stream started in cloud!", stream: streamInfo }, { headers: corsHeaders });
+        const ghRes = await fetch(
+          `https://api.github.com/repos/${repo}/actions/workflows/stream-24-7.yml/runs?per_page=5`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/vnd.github+json",
+              "User-Agent": "FluidLiveStudio",
+            },
+          }
+        );
+
+        if (!ghRes.ok) {
+          const errText = await ghRes.text();
+          return Response.json({ isLive: false, error: errText }, { status: ghRes.status, headers: corsHeaders });
+        }
+
+        const data = await ghRes.json();
+        const runs = data.workflow_runs || [];
+        const activeRun = runs.find((r) => r.status === "in_progress" || r.status === "queued");
+
+        if (activeRun) {
+          const startTime = new Date(activeRun.created_at).getTime();
+          const durationSeconds = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+          return Response.json({
+            isLive: true,
+            status: activeRun.status,
+            runId: activeRun.id,
+            runNumber: activeRun.run_number,
+            htmlUrl: activeRun.html_url,
+            startedAt: activeRun.created_at,
+            durationSeconds,
+          }, { headers: corsHeaders });
+        }
+
+        return Response.json({ isLive: false, status: "idle" }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ isLive: false, error: err.message }, { status: 500, headers: corsHeaders });
+      }
     }
 
-    if (url.pathname === "/api/stream/stop" && method === "POST") {
-      if (env.CLOUD_RUNNER_URL) {
-        try {
-          await fetch(`${env.CLOUD_RUNNER_URL}/stop`, { method: "POST" });
-        } catch (_) {}
+    // 2. Start GitHub Actions 24/7 Cloud Streamer
+    if (url.pathname === "/api/github/start" && method === "POST") {
+      try {
+        const body = await request.json();
+        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/fluid-live-studio").trim();
+        const token = (body.token || env.GITHUB_TOKEN || "").trim();
+        const branch = (body.branch || "master").trim();
+        const videoUrl = body.videoUrl;
+        const rtmpServer = body.rtmpServer || "rtmp://a.rtmp.youtube.com/live2";
+        const streamKey = body.streamKey;
+
+        if (!token) {
+          return Response.json({ success: false, message: "GitHub Token is required" }, { status: 400, headers: corsHeaders });
+        }
+        if (!videoUrl || !streamKey) {
+          return Response.json({ success: false, message: "Video URL and Stream Key are required" }, { status: 400, headers: corsHeaders });
+        }
+
+        // Trigger workflow dispatch on GitHub
+        const dispatchRes = await fetch(
+          `https://api.github.com/repos/${repo}/actions/workflows/stream-24-7.yml/dispatches`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/vnd.github+json",
+              "Content-Type": "application/json",
+              "User-Agent": "FluidLiveStudio",
+            },
+            body: JSON.stringify({
+              ref: branch,
+              inputs: {
+                video_url: videoUrl,
+                rtmp_server: rtmpServer,
+                stream_key: streamKey,
+              },
+            }),
+          }
+        );
+
+        if (!dispatchRes.ok) {
+          // If master fails, try main branch fallback
+          if (branch === "master") {
+            const fallbackRes = await fetch(
+              `https://api.github.com/repos/${repo}/actions/workflows/stream-24-7.yml/dispatches`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  Accept: "application/vnd.github+json",
+                  "Content-Type": "application/json",
+                  "User-Agent": "FluidLiveStudio",
+                },
+                body: JSON.stringify({
+                  ref: "main",
+                  inputs: {
+                    video_url: videoUrl,
+                    rtmp_server: rtmpServer,
+                    stream_key: streamKey,
+                  },
+                }),
+              }
+            );
+            if (!fallbackRes.ok) {
+              const err = await fallbackRes.text();
+              return Response.json({ success: false, message: `GitHub Dispatch failed: ${err}` }, { status: fallbackRes.status, headers: corsHeaders });
+            }
+          } else {
+            const err = await dispatchRes.text();
+            return Response.json({ success: false, message: `GitHub Dispatch failed: ${err}` }, { status: dispatchRes.status, headers: corsHeaders });
+          }
+        }
+
+        return Response.json({
+          success: true,
+          message: "24/7 Cloud Live Stream started on GitHub Actions! You can now safely close your PC.",
+        }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, error: err.message }, { status: 500, headers: corsHeaders });
       }
-      return Response.json({ success: true, message: "Stream stopped" }, { headers: corsHeaders });
     }
 
-    // ── Default: Render Full OBS Broadcast Studio UI ──────────────────────────
+    // 3. Stop / Cancel GitHub Actions Cloud Streamer
+    if (url.pathname === "/api/github/stop" && method === "POST") {
+      try {
+        const body = await request.json();
+        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/fluid-live-studio").trim();
+        const token = (body.token || env.GITHUB_TOKEN || "").trim();
+        let runId = body.runId;
+
+        if (!token) {
+          return Response.json({ success: false, message: "GitHub Token required" }, { status: 400, headers: corsHeaders });
+        }
+
+        // If runId not provided, discover the running one
+        if (!runId) {
+          const ghRes = await fetch(
+            `https://api.github.com/repos/${repo}/actions/workflows/stream-24-7.yml/runs?per_page=5`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/vnd.github+json",
+                "User-Agent": "FluidLiveStudio",
+              },
+            }
+          );
+          if (ghRes.ok) {
+            const data = await ghRes.json();
+            const active = data.workflow_runs?.find((r) => r.status === "in_progress" || r.status === "queued");
+            if (active) runId = active.id;
+          }
+        }
+
+        if (!runId) {
+          return Response.json({ success: true, message: "No active cloud stream running" }, { headers: corsHeaders });
+        }
+
+        const cancelRes = await fetch(
+          `https://api.github.com/repos/${repo}/actions/runs/${runId}/cancel`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/vnd.github+json",
+              "User-Agent": "FluidLiveStudio",
+            },
+          }
+        );
+
+        return Response.json({ success: true, message: "Cloud stream stopped" }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, error: err.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
+    // ── Default: Render Studio Dashboard UI ───────────────────────────────────
     return new Response(renderStudioDashboard(), {
       status: 200,
       headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -244,7 +396,6 @@ function renderLoginPage() {
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { background-color: #07090e; color: #f1f5f9; font-family: system-ui, -apple-system, sans-serif; }
-    .glow-blue { box-shadow: 0 0 25px rgba(59, 130, 246, 0.25); }
   </style>
 </head>
 <body class="min-h-screen flex items-center justify-center p-4">
@@ -259,7 +410,7 @@ function renderLoginPage() {
         </svg>
       </div>
       <h1 class="text-2xl font-bold tracking-tight text-white">FLUID LIVE STUDIO</h1>
-      <p class="text-xs text-slate-400 mt-1">stream.techwithjoshi.in &bull; Cloud Broadcast</p>
+      <p class="text-xs text-blue-400 mt-1 font-mono">stream.techwithjoshi.in &bull; 24/7 Cloud</p>
     </div>
 
     <form id="loginForm" class="space-y-4 relative z-10">
@@ -340,7 +491,8 @@ function renderStudioDashboard() {
     .vu-bar {
       background: linear-gradient(to top, #10b981 0%, #10b981 65%, #f59e0b 65%, #f59e0b 85%, #ef4444 85%, #ef4444 100%);
     }
-    .glow-red { box-shadow: 0 0 20px rgba(239, 68, 68, 0.4); }
+    .glow-red { box-shadow: 0 0 25px rgba(239, 68, 68, 0.45); }
+    .glow-blue { box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
   </style>
 </head>
 <body class="min-h-screen flex flex-col">
@@ -359,28 +511,36 @@ function renderStudioDashboard() {
         </div>
       </div>
 
+      <!-- Live Broadcast Badge -->
       <div id="liveBadge" class="flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wider transition-all border bg-slate-800/60 border-slate-700/60 text-slate-400">
         <span id="liveDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
         <span id="liveText">OFFLINE</span>
       </div>
     </div>
 
-    <!-- Live Stats Bar -->
+    <!-- Live Status Bar -->
     <div class="hidden md:flex items-center gap-5 text-xs font-mono bg-[#0c0d12] py-1.5 px-4 rounded-lg border border-[#1e2230]">
       <div class="flex items-center gap-1.5 text-slate-400">
         <span>⏱️ <span id="uptimeTimer">00:00:00</span></span>
       </div>
       <div class="h-3 w-[1px] bg-slate-800"></div>
-      <div>Bitrate: <span id="bitrateStat" class="text-blue-400 font-semibold">6000 kbps</span></div>
+      <div>Engine: <span class="text-indigo-400 font-semibold">GitHub Cloud 24/7</span></div>
       <div class="h-3 w-[1px] bg-slate-800"></div>
       <div>FPS: <span class="text-emerald-400 font-semibold">30.0</span></div>
       <div class="h-3 w-[1px] bg-slate-800"></div>
-      <div>Cloud: <span class="text-amber-400 font-semibold">R2 24/7</span></div>
+      <div>Storage: <span class="text-amber-400 font-semibold">R2 fluid-streams</span></div>
     </div>
 
-    <button onclick="handleLogout()" class="px-3 py-1.5 bg-[#181b24] hover:bg-red-500/15 hover:text-red-400 border border-[#272c3d] rounded-lg text-xs font-medium text-slate-400 transition">
-      Logout
-    </button>
+    <!-- Action Buttons -->
+    <div class="flex items-center gap-2">
+      <button onclick="openConfigModal()" class="flex items-center gap-1.5 px-3 py-1.5 bg-[#181b24] hover:bg-[#202534] border border-[#272c3d] rounded-lg text-xs font-medium text-slate-300 hover:text-white transition">
+        ⚙️ <span>Cloud 24/7 Settings</span>
+      </button>
+
+      <button onclick="handleLogout()" class="px-3 py-1.5 bg-[#181b24] hover:bg-red-500/15 hover:text-red-400 border border-[#272c3d] rounded-lg text-xs font-medium text-slate-400 transition">
+        Logout
+      </button>
+    </div>
   </header>
 
   <!-- Main Viewport -->
@@ -393,7 +553,7 @@ function renderStudioDashboard() {
             <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z"/>
             </svg>
-            <span class="text-xs font-bold tracking-wider text-slate-200">R2 BUCKET: fluid-streams</span>
+            <span class="text-xs font-bold tracking-wider text-slate-200">R2: fluid-streams</span>
           </div>
           <button onclick="loadVideos()" class="text-xs text-slate-400 hover:text-white" title="Refresh">🔄</button>
         </div>
@@ -440,7 +600,7 @@ function renderStudioDashboard() {
           <div id="emptyMonitor" class="flex flex-col items-center justify-center text-center p-8">
             <div class="w-16 h-16 rounded-2xl bg-[#141722] border border-[#262b3d] flex items-center justify-center mb-4 text-3xl">🎬</div>
             <h3 class="text-sm font-semibold text-slate-300">Select a Video to Preview</h3>
-            <p class="text-xs text-slate-500 mt-1 max-w-xs">Upload or pick a video from the R2 library on the left.</p>
+            <p class="text-xs text-slate-500 mt-1 max-w-xs">Upload or click a video from the R2 library on the left.</p>
           </div>
         </div>
 
@@ -464,7 +624,7 @@ function renderStudioDashboard() {
         <div class="bg-[#161822] p-3 rounded-lg border border-[#222738] space-y-3">
           <div class="flex items-center justify-between text-xs">
             <span class="font-semibold text-slate-300">Media Audio Channel</span>
-            <span id="dbDisplay" class="font-mono text-[11px] text-slate-400">-8.0 dB</span>
+            <span class="font-mono text-[11px] text-slate-400">-8.0 dB</span>
           </div>
 
           <!-- VU Meters (Stereo L/R) -->
@@ -472,13 +632,13 @@ function renderStudioDashboard() {
             <div class="flex items-center gap-1.5">
               <span class="text-[9px] font-mono text-slate-500 w-2.5">L</span>
               <div class="flex-1 h-3 bg-[#151722] rounded overflow-hidden">
-                <div id="meterL" class="h-full vu-bar transition-all duration-75" style="width: 70%"></div>
+                <div id="meterL" class="h-full vu-bar transition-all duration-75" style="width: 72%"></div>
               </div>
             </div>
             <div class="flex items-center gap-1.5">
               <span class="text-[9px] font-mono text-slate-500 w-2.5">R</span>
               <div class="flex-1 h-3 bg-[#151722] rounded overflow-hidden">
-                <div id="meterR" class="h-full vu-bar transition-all duration-75" style="width: 65%"></div>
+                <div id="meterR" class="h-full vu-bar transition-all duration-75" style="width: 68%"></div>
               </div>
             </div>
             <div class="flex justify-between text-[8px] font-mono text-slate-600 px-1 pt-0.5">
@@ -487,14 +647,19 @@ function renderStudioDashboard() {
           </div>
         </div>
 
-        <div class="mt-4 p-3 bg-[#141620] rounded-lg border border-[#202434] text-[11px] text-slate-400">
-          <strong class="text-slate-200">24/7 Cloud Broadcast</strong>
-          <p class="mt-1">Stream runs entirely in the cloud from Cloudflare R2 bucket <strong>fluid-streams</strong>. You can safely close your PC!</p>
+        <div class="mt-4 p-3 bg-[#141620] rounded-lg border border-[#202434] text-[11px] text-slate-400 space-y-1">
+          <div class="flex items-center justify-between">
+            <strong class="text-slate-200">24/7 Cloud Broadcast</strong>
+            <span id="cloudRunnerStatusPill" class="text-[9px] font-mono px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">CLOUD READY</span>
+          </div>
+          <p class="text-[10px] text-slate-500">
+            Stream runs 100% in the cloud via GitHub Actions from Cloudflare R2 bucket <strong>fluid-streams</strong>. You can safely turn off your PC!
+          </p>
         </div>
       </div>
     </div>
 
-    <!-- Bottom Controls Dock (OBS Style) -->
+    <!-- Bottom Controls Dock (OBS Broadcast Controls) -->
     <div class="bg-[#11131a] rounded-xl border border-[#202434] p-4 shadow-xl flex flex-col md:flex-row items-center justify-between gap-4">
       <div class="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 w-full">
         <div>
@@ -504,7 +669,7 @@ function renderStudioDashboard() {
 
         <div>
           <label class="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">YouTube Stream Key</label>
-          <input type="password" id="streamKeyInput" placeholder="Paste YouTube stream key here..." class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <input type="password" id="streamKeyInput" placeholder="Paste YouTube stream key (e.g. sk_...)" class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500">
         </div>
       </div>
 
@@ -514,22 +679,226 @@ function renderStudioDashboard() {
           <span class="text-xs text-slate-300 font-medium">Loop 24/7</span>
         </label>
 
-        <button onclick="handleToggleStream()" id="streamBtn" class="min-w-[190px] h-11 px-6 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-600/25">
-          <span>Start Streaming</span>
+        <button onclick="handleToggleStream()" id="streamBtn" class="min-w-[210px] h-11 px-6 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-600/25">
+          <span>Start Cloud Stream</span>
         </button>
       </div>
     </div>
   </main>
 
+  <!-- GitHub Cloud 24/7 Settings Modal -->
+  <div id="configModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+    <div class="w-full max-w-md bg-[#12141d] border border-[#262b3d] rounded-2xl p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between pb-3 border-b border-[#222738]">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">⚙️</span>
+          <h2 class="text-sm font-bold text-white">GitHub 24/7 Cloud Stream Settings</h2>
+        </div>
+        <button onclick="closeConfigModal()" class="text-slate-400 hover:text-white">&times;</button>
+      </div>
+
+      <p class="text-xs text-slate-400">
+        Web dashboard se seedha GitHub Actions runner control karne ke liye apna GitHub token enter karein. Ek baar save hone ke baad aap bina PC ke stream start/stop kar sakenge.
+      </p>
+
+      <div>
+        <label class="block text-xs font-medium text-slate-300 mb-1">GitHub Repository (Owner/Repo)</label>
+        <input type="text" id="ghRepoInput" placeholder="DHANESHJOSHI/fluid-live-studio" class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200">
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-slate-300 mb-1">GitHub Personal Access Token (PAT)</label>
+        <input type="password" id="ghTokenInput" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200">
+        <p class="text-[10px] text-slate-500 mt-1">
+          Generate at <a href="https://github.com/settings/tokens/new" target="_blank" class="text-blue-400 underline">github.com/settings/tokens</a> with <strong>repo</strong> & <strong>workflow</strong> scope.
+        </p>
+      </div>
+
+      <div class="pt-3 border-t border-[#222738] flex justify-end gap-2">
+        <button onclick="closeConfigModal()" class="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white">Cancel</button>
+        <button onclick="saveGitHubConfig()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let isLive = false;
     let selectedVideoUrl = null;
     let selectedVideoName = null;
-    let uptimeInterval = null;
-    let uptimeSec = 0;
+    let currentRunId = null;
+    let pollInterval = null;
 
     const videoEl = document.getElementById('previewVideo');
     const playBtn = document.getElementById('playBtn');
+
+    // Load Saved GitHub Config from LocalStorage
+    function getGHConfig() {
+      return {
+        repo: localStorage.getItem('fluid_gh_repo') || 'DHANESHJOSHI/fluid-live-studio',
+        token: localStorage.getItem('fluid_gh_token') || '',
+        branch: localStorage.getItem('fluid_gh_branch') || 'master',
+      };
+    }
+
+    function openConfigModal() {
+      const cfg = getGHConfig();
+      document.getElementById('ghRepoInput').value = cfg.repo;
+      document.getElementById('ghTokenInput').value = cfg.token;
+      document.getElementById('configModal').classList.remove('hidden');
+    }
+
+    function closeConfigModal() {
+      document.getElementById('configModal').classList.add('hidden');
+    }
+
+    function saveGitHubConfig() {
+      const repo = document.getElementById('ghRepoInput').value.trim();
+      const token = document.getElementById('ghTokenInput').value.trim();
+      if (!token) {
+        alert('Please enter your GitHub Token!');
+        return;
+      }
+      localStorage.setItem('fluid_gh_repo', repo);
+      localStorage.setItem('fluid_gh_token', token);
+      closeConfigModal();
+      checkCloudStreamStatus();
+    }
+
+    // Check Cloud Stream Status from GitHub
+    async function checkCloudStreamStatus() {
+      const cfg = getGHConfig();
+      if (!cfg.token) return;
+
+      try {
+        const res = await fetch('/api/github/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cfg),
+        });
+        const data = await res.json();
+
+        if (data.isLive) {
+          isLive = true;
+          currentRunId = data.runId;
+          updateLiveUI(true, data.durationSeconds || 0, data.htmlUrl);
+        } else {
+          if (isLive) {
+            isLive = false;
+            updateLiveUI(false);
+          }
+        }
+      } catch (e) {
+        console.warn('Status poll warning:', e);
+      }
+    }
+
+    function updateLiveUI(live, duration = 0, htmlUrl = null) {
+      const btn = document.getElementById('streamBtn');
+      const badge = document.getElementById('liveBadge');
+      const dot = document.getElementById('liveDot');
+      const text = document.getElementById('liveText');
+      const timer = document.getElementById('uptimeTimer');
+
+      if (live) {
+        btn.disabled = false;
+        btn.className = "min-w-[210px] h-11 px-6 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer bg-red-600 hover:bg-red-500 text-white glow-red animate-pulse";
+        btn.innerHTML = "<span>Stop Cloud Stream</span>";
+
+        badge.className = "flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wider transition-all border bg-red-500/15 border-red-500/40 text-red-400 glow-red";
+        dot.className = "w-2 h-2 rounded-full bg-red-500 animate-ping";
+        text.innerText = "LIVE (CLOUD 24/7)";
+
+        const h = Math.floor(duration / 3600);
+        const m = Math.floor((duration % 3600) / 60);
+        const s = duration % 60;
+        timer.innerText = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+      } else {
+        btn.disabled = false;
+        btn.className = "min-w-[210px] h-11 px-6 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-600/25";
+        btn.innerHTML = "<span>Start Cloud Stream</span>";
+
+        badge.className = "flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wider transition-all border bg-slate-800/60 border-slate-700/60 text-slate-400";
+        dot.className = "w-2 h-2 rounded-full bg-slate-500";
+        text.innerText = "OFFLINE";
+      }
+    }
+
+    // Toggle Stream Action directly from Web UI
+    async function handleToggleStream() {
+      const btn = document.getElementById('streamBtn');
+      const cfg = getGHConfig();
+
+      if (!cfg.token) {
+        openConfigModal();
+        return;
+      }
+
+      if (!isLive) {
+        const key = document.getElementById('streamKeyInput').value.trim();
+        const srv = document.getElementById('rtmpServerInput').value.trim();
+
+        if (!selectedVideoUrl) {
+          alert('Please select or upload a video first!');
+          return;
+        }
+        if (!key) {
+          alert('Please enter your YouTube stream key!');
+          return;
+        }
+
+        btn.disabled = true;
+        btn.innerText = "Dispatching Cloud Runner...";
+
+        try {
+          const res = await fetch('/api/github/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              repo: cfg.repo,
+              token: cfg.token,
+              branch: cfg.branch,
+              videoUrl: window.location.origin + selectedVideoUrl,
+              rtmpServer: srv,
+              streamKey: key,
+            }),
+          });
+
+          const data = await res.json();
+          if (!data.success) {
+            alert(data.message || 'Failed to trigger cloud stream');
+            btn.disabled = false;
+            btn.innerText = "Start Cloud Stream";
+            return;
+          }
+
+          alert('🚀 24/7 Cloud Live Stream has been dispatched on GitHub Actions! You can now turn off your PC.');
+          setTimeout(checkCloudStreamStatus, 3000);
+        } catch (e) {
+          alert('Error starting cloud stream: ' + e.message);
+          btn.disabled = false;
+          btn.innerText = "Start Cloud Stream";
+        }
+      } else {
+        if (!confirm('Stop 24/7 live stream on YouTube?')) return;
+        btn.disabled = true;
+        btn.innerText = "Stopping Cloud Runner...";
+
+        try {
+          await fetch('/api/github/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              repo: cfg.repo,
+              token: cfg.token,
+              runId: currentRunId,
+            }),
+          });
+          setTimeout(checkCloudStreamStatus, 2000);
+        } catch (e) {
+          alert('Error stopping cloud stream: ' + e.message);
+        }
+      }
+    }
 
     // Load Videos from Cloudflare R2
     async function loadVideos() {
@@ -572,7 +941,6 @@ function renderStudioDashboard() {
       loadVideos();
     }
 
-    // Direct Cloudflare R2 Upload
     function uploadSelectedVideo(file) {
       if (!file) return;
       const progressContainer = document.getElementById('uploadProgressContainer');
@@ -614,7 +982,6 @@ function renderStudioDashboard() {
       loadVideos();
     }
 
-    // Video Controls
     function toggleVideoPlay() {
       if (videoEl.paused) {
         videoEl.play();
@@ -654,82 +1021,15 @@ function renderStudioDashboard() {
       return String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
     }
 
-    // Stream Toggle
-    async function handleToggleStream() {
-      const btn = document.getElementById('streamBtn');
-      const key = document.getElementById('streamKeyInput').value.trim();
-      const srv = document.getElementById('rtmpServerInput').value.trim();
-      const loop = document.getElementById('loopCheckbox').checked;
-
-      if (!isLive) {
-        if (!selectedVideoUrl) {
-          alert('Please select or upload a video first!');
-          return;
-        }
-        if (!key) {
-          alert('Please enter your YouTube stream key!');
-          return;
-        }
-
-        btn.disabled = true;
-        btn.innerText = "Connecting to YouTube...";
-
-        try {
-          const res = await fetch('/api/stream/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              videoUrl: window.location.origin + selectedVideoUrl,
-              videoName: selectedVideoName,
-              rtmpServer: srv,
-              streamKey: key,
-              loop,
-            })
-          });
-
-          isLive = true;
-          btn.disabled = false;
-          btn.className = "min-w-[190px] h-11 px-6 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer bg-red-600 hover:bg-red-500 text-white glow-red animate-pulse";
-          btn.innerHTML = "<span>Stop Streaming</span>";
-
-          document.getElementById('liveBadge').className = "flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wider transition-all border bg-red-500/15 border-red-500/40 text-red-400 glow-red";
-          document.getElementById('liveDot').className = "w-2 h-2 rounded-full bg-red-500 animate-ping";
-          document.getElementById('liveText').innerText = "LIVE (CLOUD)";
-
-          uptimeSec = 0;
-          uptimeInterval = setInterval(() => {
-            uptimeSec++;
-            const h = Math.floor(uptimeSec / 3600);
-            const m = Math.floor((uptimeSec % 3600) / 60);
-            const s = uptimeSec % 60;
-            document.getElementById('uptimeTimer').innerText = 
-              String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
-          }, 1000);
-        } catch (e) {
-          alert('Failed to start stream: ' + e.message);
-          btn.disabled = false;
-          btn.innerText = "Start Streaming";
-        }
-      } else {
-        await fetch('/api/stream/stop', { method: 'POST' });
-        isLive = false;
-        clearInterval(uptimeInterval);
-        btn.className = "min-w-[190px] h-11 px-6 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-600/25";
-        btn.innerHTML = "<span>Start Streaming</span>";
-
-        document.getElementById('liveBadge').className = "flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-semibold tracking-wider transition-all border bg-slate-800/60 border-slate-700/60 text-slate-400";
-        document.getElementById('liveDot').className = "w-2 h-2 rounded-full bg-slate-500";
-        document.getElementById('liveText').innerText = "OFFLINE";
-      }
-    }
-
     async function handleLogout() {
       await fetch('/api/auth/logout', { method: 'POST' });
       window.location.reload();
     }
 
-    // Init
+    // Initial Load & Status Poll
     loadVideos();
+    checkCloudStreamStatus();
+    pollInterval = setInterval(checkCloudStreamStatus, 4000);
   </script>
 </body>
 </html>`;
