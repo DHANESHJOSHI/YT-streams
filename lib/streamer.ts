@@ -89,8 +89,12 @@ export function startLiveStream(options: StartStreamOptions): { success: boolean
   }
 
   // Sanitize RTMP destination
-  const cleanServer = rtmpServer.replace(/\/$/, '');
+  let cleanServer = rtmpServer.trim().replace(/\/$/, '');
   const cleanKey = streamKey.trim();
+  // Auto-append /app for Amazon IVS / Twitch endpoints if missing
+  if (cleanServer.includes('live-video.net') && !cleanServer.endsWith('/app')) {
+    cleanServer += '/app';
+  }
   const rtmpTarget = `${cleanServer}/${cleanKey}`;
   const maskedKey = cleanKey.length > 8 ? `${cleanKey.slice(0, 4)}••••••••${cleanKey.slice(-4)}` : '••••••••';
 
@@ -158,12 +162,12 @@ export function startLiveStream(options: StartStreamOptions): { success: boolean
     args.push('-vf', `drawtext=${fontArg}text='${escaped}':x=(w-text_w)*${xRatio}:y=(h-text_h)*${yRatio}:fontsize=${size}:fontcolor=${color}${boxArg}`);
     args.push(
       '-c:v', 'libx264',
-      '-preset', 'veryfast',
+      '-preset', 'ultrafast',
       '-tune', 'zerolatency',
       '-pix_fmt', 'yuv420p',
-      '-b:v', '4500k',
-      '-maxrate', '6000k',
-      '-bufsize', '10000k',
+      '-b:v', '2800k',
+      '-maxrate', '3500k',
+      '-bufsize', '6000k',
       '-g', '60'
     );
   } else if (isH264) {
@@ -171,12 +175,12 @@ export function startLiveStream(options: StartStreamOptions): { success: boolean
   } else {
     args.push(
       '-c:v', 'libx264',
-      '-preset', 'veryfast',
+      '-preset', 'ultrafast',
       '-tune', 'zerolatency',
       '-pix_fmt', 'yuv420p',
-      '-b:v', '5000k',
-      '-maxrate', '6500k',
-      '-bufsize', '12000k',
+      '-b:v', '2800k',
+      '-maxrate', '3500k',
+      '-bufsize', '6000k',
       '-g', '60'
     );
   }
