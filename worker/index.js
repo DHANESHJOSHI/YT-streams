@@ -191,7 +191,7 @@ export default {
     if (url.pathname === "/api/github/status" && method === "POST") {
       try {
         const body = await request.json();
-        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/fluid-live-studio").trim();
+        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams").trim();
         const token = (body.token || env.GITHUB_TOKEN || "").trim();
 
         if (!token) {
@@ -246,9 +246,9 @@ export default {
     if (url.pathname === "/api/github/start" && method === "POST") {
       try {
         const body = await request.json();
-        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/fluid-live-studio").trim();
+        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams").trim();
         const token = (body.token || env.GITHUB_TOKEN || "").trim();
-        const branch = (body.branch || "master").trim();
+        const branch = (body.branch || "main").trim();
         const videoUrl = body.videoUrl;
         const rtmpServer = body.rtmpServer || "rtmp://a.rtmp.youtube.com/live2";
         const streamKey = body.streamKey;
@@ -328,7 +328,7 @@ export default {
     if (url.pathname === "/api/github/stop" && method === "POST") {
       try {
         const body = await request.json();
-        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/fluid-live-studio").trim();
+        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams").trim();
         const token = (body.token || env.GITHUB_TOKEN || "").trim();
         let runId = body.runId;
 
@@ -703,7 +703,7 @@ function renderStudioDashboard() {
 
       <div>
         <label class="block text-xs font-medium text-slate-300 mb-1">GitHub Repository (Owner/Repo)</label>
-        <input type="text" id="ghRepoInput" placeholder="DHANESHJOSHI/fluid-live-studio" class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200">
+        <input type="text" id="ghRepoInput" placeholder="DHANESHJOSHI/YT-streams" class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200">
       </div>
 
       <div>
@@ -734,9 +734,9 @@ function renderStudioDashboard() {
     // Load Saved GitHub Config from LocalStorage
     function getGHConfig() {
       return {
-        repo: localStorage.getItem('fluid_gh_repo') || 'DHANESHJOSHI/fluid-live-studio',
+        repo: localStorage.getItem('fluid_gh_repo') || 'DHANESHJOSHI/YT-streams',
         token: localStorage.getItem('fluid_gh_token') || '',
-        branch: localStorage.getItem('fluid_gh_branch') || 'master',
+        branch: localStorage.getItem('fluid_gh_branch') || 'main',
       };
     }
 

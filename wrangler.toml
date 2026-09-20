@@ -15,3 +15,4 @@ bucket_name = "fluid-streams"
 [vars]
 APP_PASSWORD = "fluidislive@2026"
 STREAM_DOMAIN = "stream.techwithjoshi.in"
+GITHUB_REPO = "DHANESHJOSHI/YT-streams"
