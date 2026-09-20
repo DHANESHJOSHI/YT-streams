@@ -641,7 +641,9 @@ function renderLoginPage() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Fluid Live Studio - Access</title>
+  <script>
+    (function(){var w=console.warn;console.warn=function(...a){if(typeof a[0]==='string'&&a[0].indexOf('tailwindcss.com')!==-1)return;w.apply(console,a);};})();
+  </script>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { background-color: #07090e; color: #f1f5f9; font-family: system-ui, -apple-system, sans-serif; }
@@ -732,7 +734,9 @@ function renderStudioDashboard(env = {}) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Fluid Live Studio - stream.techwithjoshi.in</title>
+  <script>
+    (function(){var w=console.warn;console.warn=function(...a){if(typeof a[0]==='string'&&a[0].indexOf('tailwindcss.com')!==-1)return;w.apply(console,a);};})();
+  </script>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { background-color: #090a0f; color: #f1f5f9; font-family: system-ui, -apple-system, sans-serif; overflow-x: hidden; }
@@ -1116,7 +1120,11 @@ function renderStudioDashboard(env = {}) {
     const playBtn = document.getElementById('playBtn');
 
     function cleanRepoName(r) {
-      let repo = (r || '').trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').trim();
+      let repo = (r || '').trim();
+      if (repo.startsWith('https://github.com/')) repo = repo.slice(19);
+      if (repo.startsWith('http://github.com/')) repo = repo.slice(18);
+      if (repo.endsWith('.git')) repo = repo.slice(0, -4);
+      repo = repo.trim();
       if (!repo || repo.includes('fluid-live-studio') || repo.includes('dailpad') || !repo.includes('/')) {
         return 'DHANESHJOSHI/YT-streams';
       }
