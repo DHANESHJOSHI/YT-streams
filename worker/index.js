@@ -279,11 +279,102 @@ export default {
     }
 
     // ── GITHUB ACTIONS 24/7 CLOUD STREAM CONTROLLER ──────────────────────────
+    function cleanRepo(raw) {
+      let r = (raw || "").trim().replace(/^https?:\/\/github\.com\//i, "").replace(/\.git$/i, "").trim();
+      if (!r || r.includes("fluid-live-studio") || r.includes("dailpad") || !r.includes("/")) {
+        return "DHANESHJOSHI/YT-streams";
+      }
+      return r;
+    }
+
+    // 0. Test GitHub Connection & Permissions
+    if (url.pathname === "/api/github/test" && method === "POST") {
+      try {
+        const body = await request.json();
+        const repo = cleanRepo(body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams");
+        const token = (body.token || env.GITHUB_TOKEN || "").trim();
+
+        if (!token) {
+          return Response.json({ success: false, message: "GitHub Token is required" }, { status: 400, headers: corsHeaders });
+        }
+
+        // Test 1: Repo existence & basic token validity
+        const repoRes = await fetch(`https://api.github.com/repos/${repo}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "User-Agent": "FluidLiveStudio",
+          },
+        });
+
+        if (repoRes.status === 401) {
+          return Response.json({
+            success: false,
+            message: "Invalid GitHub Token (401 Bad Credentials). Please recheck or regenerate your token.",
+          }, { status: 200, headers: corsHeaders });
+        }
+
+        if (repoRes.status === 404) {
+          return Response.json({
+            success: false,
+            message: `Cannot access repo "${repo}" (404 Not Found). Since "${repo}" is a private repository, your Personal Access Token MUST have the "repo" scope (Full control of private repositories). Classic Token: check [x] repo. Fine-Grained Token: add "${repo}" under repository access.`,
+          }, { status: 200, headers: corsHeaders });
+        }
+
+        if (!repoRes.ok) {
+          const err = await repoRes.text();
+          return Response.json({
+            success: false,
+            message: `GitHub repository check failed (${repoRes.status}): ${err}`,
+          }, { status: 200, headers: corsHeaders });
+        }
+
+        const repoData = await repoRes.json();
+
+        // Test 2: Workflow permissions
+        const wfRes = await fetch(`https://api.github.com/repos/${repo}/actions/workflows`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "User-Agent": "FluidLiveStudio",
+          },
+        });
+
+        if (wfRes.status === 403 || wfRes.status === 404) {
+          return Response.json({
+            success: false,
+            message: `Your token has access to "${repo}", but lacks GitHub Actions permissions! Please ensure your token has the "workflow" scope checked.`,
+          }, { status: 200, headers: corsHeaders });
+        }
+
+        if (!wfRes.ok) {
+          const wfErr = await wfRes.text();
+          return Response.json({
+            success: false,
+            message: `Actions permission check failed (${wfRes.status}): ${wfErr}`,
+          }, { status: 200, headers: corsHeaders });
+        }
+
+        const wfData = await wfRes.json();
+        const workflows = wfData.workflows || [];
+        const hasWorkflow = workflows.find((w) => w.path.includes("stream-24-7.yml") || w.name.toLowerCase().includes("24/7"));
+
+        return Response.json({
+          success: true,
+          message: `Connected to ${repoData.full_name} (${repoData.private ? "Private" : "Public"})! Workflow "${hasWorkflow ? hasWorkflow.name : "stream-24-7.yml"}" is ready on branch "${repoData.default_branch}".`,
+          defaultBranch: repoData.default_branch,
+          workflowId: hasWorkflow ? hasWorkflow.id : null,
+        }, { headers: corsHeaders });
+      } catch (err) {
+        return Response.json({ success: false, message: err.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
     // 1. Check Status of GitHub Actions Streamer
     if (url.pathname === "/api/github/status" && method === "POST") {
       try {
         const body = await request.json();
-        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams").trim();
+        const repo = cleanRepo(body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams");
         const token = (body.token || env.GITHUB_TOKEN || "").trim();
 
         if (!token) {
@@ -295,7 +386,7 @@ export default {
         }
 
         const ghRes = await fetch(
-          `https://api.github.com/repos/${repo}/actions/workflows/stream-24-7.yml/runs?per_page=5`,
+          `https://api.github.com/repos/${repo}/actions/runs?per_page=10`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -338,7 +429,7 @@ export default {
     if (url.pathname === "/api/github/start" && method === "POST") {
       try {
         const body = await request.json();
-        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams").trim();
+        const repo = cleanRepo(body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams");
         const token = (body.token || env.GITHUB_TOKEN || "").trim();
         const branch = (body.branch || "main").trim();
         const videoUrl = body.videoUrl;
@@ -346,79 +437,130 @@ export default {
         const streamKey = body.streamKey;
 
         if (!token) {
-          return Response.json({ success: false, message: "GitHub Token is required" }, { status: 400, headers: corsHeaders });
+          return Response.json({ success: false, message: "GitHub Token is required. Open Settings (⚙️) to enter your token." }, { status: 400, headers: corsHeaders });
         }
         if (!videoUrl || !streamKey) {
-          return Response.json({ success: false, message: "Video URL and Stream Key are required" }, { status: 400, headers: corsHeaders });
+          return Response.json({ success: false, message: "Video selection and YouTube Stream Key are required." }, { status: 400, headers: corsHeaders });
         }
 
-        // Trigger workflow dispatch on GitHub
-        const dispatchRes = await fetch(
-          `https://api.github.com/repos/${repo}/actions/workflows/stream-24-7.yml/dispatches`,
-          {
-            method: "POST",
+        // Diagnostic Pre-check: Verify repo accessibility
+        const repoCheckRes = await fetch(`https://api.github.com/repos/${repo}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "User-Agent": "FluidLiveStudio",
+          },
+        });
+
+        if (repoCheckRes.status === 401) {
+          return Response.json({
+            success: false,
+            message: "GitHub Token Invalid (401 Bad Credentials). Please verify your token in Settings (⚙️).",
+          }, { status: 401, headers: corsHeaders });
+        }
+
+        if (repoCheckRes.status === 404) {
+          return Response.json({
+            success: false,
+            message: `GitHub repo "${repo}" not found or inaccessible (404). Since "${repo}" is a private repo, your token MUST have the "repo" scope checked. Go to GitHub -> Settings -> Developer Settings -> Personal Access Tokens -> Generate Classic Token -> Check [x] repo and [x] workflow.`,
+          }, { status: 404, headers: corsHeaders });
+        }
+
+        // Find workflow ID if present
+        let workflowId = "stream-24-7.yml";
+        try {
+          const wfRes = await fetch(`https://api.github.com/repos/${repo}/actions/workflows`, {
             headers: {
               Authorization: `Bearer ${token}`,
               Accept: "application/vnd.github+json",
-              "Content-Type": "application/json",
               "User-Agent": "FluidLiveStudio",
             },
-            body: JSON.stringify({
-              ref: branch,
-              inputs: {
-                video_url: videoUrl,
-                rtmp_server: rtmpServer,
-                stream_key: streamKey,
-                overlay_text: body.overlayText || "",
-                overlay_x_pct: String(body.overlayXPct ?? "50"),
-                overlay_y_pct: String(body.overlayYPct ?? "12"),
-                overlay_color: body.overlayColor || "yellow",
-                overlay_fontsize: String(body.overlayFontSize || "48"),
-                overlay_transform: body.overlayTransform || "none",
-                overlay_box: body.overlayBox || "true",
-              },
-            }),
-          }
-        );
-
-        if (!dispatchRes.ok) {
-          // If master fails, try main branch fallback
-          if (branch === "master") {
-            const fallbackRes = await fetch(
-              `https://api.github.com/repos/${repo}/actions/workflows/stream-24-7.yml/dispatches`,
-              {
-                method: "POST",
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  Accept: "application/vnd.github+json",
-                  "Content-Type": "application/json",
-                  "User-Agent": "FluidLiveStudio",
-                },
-                body: JSON.stringify({
-                  ref: "main",
-                  inputs: {
-                    video_url: videoUrl,
-                    rtmp_server: rtmpServer,
-                    stream_key: streamKey,
-                    overlay_text: body.overlayText || "",
-                    overlay_x_pct: String(body.overlayXPct ?? "50"),
-                    overlay_y_pct: String(body.overlayYPct ?? "12"),
-                    overlay_color: body.overlayColor || "yellow",
-                    overlay_fontsize: String(body.overlayFontSize || "48"),
-                    overlay_transform: body.overlayTransform || "none",
-                    overlay_box: body.overlayBox || "true",
-                  },
-                }),
-              }
-            );
-            if (!fallbackRes.ok) {
-              const err = await fallbackRes.text();
-              return Response.json({ success: false, message: `GitHub Dispatch failed: ${err}` }, { status: fallbackRes.status, headers: corsHeaders });
+          });
+          if (wfRes.ok) {
+            const wfData = await wfRes.json();
+            const found = (wfData.workflows || []).find((w) => w.path.includes("stream-24-7.yml") || w.name.toLowerCase().includes("24/7"));
+            if (found && found.id) {
+              workflowId = String(found.id);
             }
-          } else {
-            const err = await dispatchRes.text();
-            return Response.json({ success: false, message: `GitHub Dispatch failed: ${err}` }, { status: dispatchRes.status, headers: corsHeaders });
           }
+        } catch (_) {}
+
+        const dispatchInputs = {
+          video_url: videoUrl,
+          rtmp_server: rtmpServer,
+          stream_key: streamKey,
+          overlay_text: body.overlayText || "",
+          overlay_x_pct: String(body.overlayXPct ?? "50"),
+          overlay_y_pct: String(body.overlayYPct ?? "12"),
+          overlay_color: body.overlayColor || "yellow",
+          overlay_fontsize: String(body.overlayFontSize || "48"),
+          overlay_transform: body.overlayTransform || "none",
+          overlay_box: body.overlayBox || "true",
+        };
+
+        let dispatchSuccess = false;
+        let lastError = "";
+
+        // Attempt workflow_dispatch on ref
+        const branchesToTry = [branch, "main", "master"].filter((v, i, a) => a.indexOf(v) === i);
+        for (const b of branchesToTry) {
+          const dispatchRes = await fetch(
+            `https://api.github.com/repos/${repo}/actions/workflows/${workflowId}/dispatches`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/vnd.github+json",
+                "Content-Type": "application/json",
+                "User-Agent": "FluidLiveStudio",
+              },
+              body: JSON.stringify({
+                ref: b,
+                inputs: dispatchInputs,
+              }),
+            }
+          );
+
+          if (dispatchRes.status === 204 || dispatchRes.ok) {
+            dispatchSuccess = true;
+            break;
+          } else {
+            lastError = await dispatchRes.text();
+          }
+        }
+
+        // If workflow_dispatch failed, try repository_dispatch fallback
+        if (!dispatchSuccess) {
+          const repoDispatchRes = await fetch(
+            `https://api.github.com/repos/${repo}/dispatches`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/vnd.github+json",
+                "Content-Type": "application/json",
+                "User-Agent": "FluidLiveStudio",
+              },
+              body: JSON.stringify({
+                event_type: "start_stream",
+                client_payload: dispatchInputs,
+              }),
+            }
+          );
+
+          if (repoDispatchRes.status === 204 || repoDispatchRes.ok) {
+            dispatchSuccess = true;
+          } else {
+            const rdErr = await repoDispatchRes.text();
+            lastError = `${lastError} | repository_dispatch: ${rdErr}`;
+          }
+        }
+
+        if (!dispatchSuccess) {
+          return Response.json({
+            success: false,
+            message: `GitHub Dispatch failed: ${lastError}. Make sure your token has "repo" and "workflow" scopes.`,
+          }, { status: 400, headers: corsHeaders });
         }
 
         return Response.json({
@@ -434,7 +576,7 @@ export default {
     if (url.pathname === "/api/github/stop" && method === "POST") {
       try {
         const body = await request.json();
-        const repo = (body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams").trim();
+        const repo = cleanRepo(body.repo || env.GITHUB_REPO || "DHANESHJOSHI/YT-streams");
         const token = (body.token || env.GITHUB_TOKEN || "").trim();
         let runId = body.runId;
 
@@ -445,7 +587,7 @@ export default {
         // If runId not provided, discover the running one
         if (!runId) {
           const ghRes = await fetch(
-            `https://api.github.com/repos/${repo}/actions/workflows/stream-24-7.yml/runs?per_page=5`,
+            `https://api.github.com/repos/${repo}/actions/runs?per_page=10`,
             {
               headers: {
                 Authorization: `Bearer ${token}`,
@@ -912,35 +1054,50 @@ function renderStudioDashboard() {
 
   <!-- GitHub Cloud 24/7 Settings Modal -->
   <div id="configModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-    <div class="w-full max-w-md bg-[#12141d] border border-[#262b3d] rounded-2xl p-6 shadow-2xl space-y-4">
+    <div class="w-full max-w-lg bg-[#12141d] border border-[#262b3d] rounded-2xl p-6 shadow-2xl space-y-4">
       <div class="flex items-center justify-between pb-3 border-b border-[#222738]">
         <div class="flex items-center gap-2">
           <span class="text-lg">⚙️</span>
           <h2 class="text-sm font-bold text-white">GitHub 24/7 Cloud Stream Settings</h2>
         </div>
-        <button onclick="closeConfigModal()" class="text-slate-400 hover:text-white">&times;</button>
+        <button onclick="closeConfigModal()" class="text-slate-400 hover:text-white cursor-pointer">&times;</button>
       </div>
 
-      <p class="text-xs text-slate-400">
-        Web dashboard se seedha GitHub Actions runner control karne ke liye apna GitHub token enter karein. Ek baar save hone ke baad aap bina PC ke stream start/stop kar sakenge.
-      </p>
+      <div class="p-3 bg-blue-950/40 border border-blue-800/50 rounded-lg text-[11px] text-blue-200 space-y-1">
+        <p class="font-semibold text-blue-100 flex items-center gap-1.5">
+          <span>🔑</span> Private Repo Token Instructions:
+        </p>
+        <p>1. Open <a href="https://github.com/settings/tokens/new" target="_blank" class="underline text-blue-400 font-semibold hover:text-blue-300">GitHub Personal Access Tokens (Classic)</a>.</p>
+        <p>2. Select scopes: <strong class="text-white underline">[✓] repo</strong> (Full control of private repositories) & <strong class="text-white underline">[✓] workflow</strong> (Trigger GitHub Actions).</p>
+        <p>3. Generate token, paste it below, and click <strong>Test Connection</strong> to verify.</p>
+      </div>
 
       <div>
         <label class="block text-xs font-medium text-slate-300 mb-1">GitHub Repository (Owner/Repo)</label>
-        <input type="text" id="ghRepoInput" placeholder="DHANESHJOSHI/YT-streams" class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200">
+        <input type="text" id="ghRepoInput" value="DHANESHJOSHI/YT-streams" placeholder="DHANESHJOSHI/YT-streams" class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
 
-      <div>
-        <label class="block text-xs font-medium text-slate-300 mb-1">GitHub Personal Access Token (PAT)</label>
-        <input type="password" id="ghTokenInput" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200">
-        <p class="text-[10px] text-slate-500 mt-1">
-          Generate at <a href="https://github.com/settings/tokens/new" target="_blank" class="text-blue-400 underline">github.com/settings/tokens</a> with <strong>repo</strong> & <strong>workflow</strong> scope.
-        </p>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div class="md:col-span-2">
+          <label class="block text-xs font-medium text-slate-300 mb-1">GitHub Personal Access Token (PAT)</label>
+          <input type="password" id="ghTokenInput" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Branch</label>
+          <input type="text" id="ghBranchInput" value="main" placeholder="main" class="w-full px-3 py-2 bg-[#0a0c13] border border-[#262b3d] rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500">
+        </div>
       </div>
 
-      <div class="pt-3 border-t border-[#222738] flex justify-end gap-2">
-        <button onclick="closeConfigModal()" class="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white">Cancel</button>
-        <button onclick="saveGitHubConfig()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold">Save Settings</button>
+      <div id="ghTestResult" class="hidden text-xs p-3 rounded-lg border"></div>
+
+      <div class="pt-3 border-t border-[#222738] flex items-center justify-between gap-2">
+        <button type="button" onclick="testGitHubConnection()" id="testGhBtn" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer">
+          <span>🔍</span> Test Connection
+        </button>
+        <div class="flex gap-2">
+          <button onclick="closeConfigModal()" class="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white cursor-pointer">Cancel</button>
+          <button onclick="saveGitHubConfig()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold cursor-pointer">Save Settings</button>
+        </div>
       </div>
     </div>
   </div>
@@ -955,12 +1112,22 @@ function renderStudioDashboard() {
     const videoEl = document.getElementById('previewVideo');
     const playBtn = document.getElementById('playBtn');
 
+    function cleanRepoName(r) {
+      let repo = (r || '').trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').trim();
+      if (!repo || repo.includes('fluid-live-studio') || repo.includes('dailpad') || !repo.includes('/')) {
+        return 'DHANESHJOSHI/YT-streams';
+      }
+      return repo;
+    }
+
     // Load Saved GitHub Config from LocalStorage
     function getGHConfig() {
+      let repo = cleanRepoName(localStorage.getItem('fluid_gh_repo'));
+      localStorage.setItem('fluid_gh_repo', repo);
       return {
-        repo: localStorage.getItem('fluid_gh_repo') || 'DHANESHJOSHI/YT-streams',
-        token: localStorage.getItem('fluid_gh_token') || '',
-        branch: localStorage.getItem('fluid_gh_branch') || 'main',
+        repo: repo,
+        token: (localStorage.getItem('fluid_gh_token') || '').trim(),
+        branch: (localStorage.getItem('fluid_gh_branch') || 'main').trim(),
       };
     }
 
@@ -968,6 +1135,8 @@ function renderStudioDashboard() {
       const cfg = getGHConfig();
       document.getElementById('ghRepoInput').value = cfg.repo;
       document.getElementById('ghTokenInput').value = cfg.token;
+      document.getElementById('ghBranchInput').value = cfg.branch;
+      document.getElementById('ghTestResult').classList.add('hidden');
       document.getElementById('configModal').classList.remove('hidden');
     }
 
@@ -975,15 +1144,60 @@ function renderStudioDashboard() {
       document.getElementById('configModal').classList.add('hidden');
     }
 
-    function saveGitHubConfig() {
-      const repo = document.getElementById('ghRepoInput').value.trim();
+    async function testGitHubConnection() {
+      const btn = document.getElementById('testGhBtn');
+      const resDiv = document.getElementById('ghTestResult');
+      const repo = cleanRepoName(document.getElementById('ghRepoInput').value);
       const token = document.getElementById('ghTokenInput').value.trim();
+
+      if (!token) {
+        resDiv.className = "text-xs p-3 rounded-lg border bg-amber-950/50 border-amber-800/60 text-amber-300";
+        resDiv.innerHTML = "⚠️ Please enter your GitHub Personal Access Token first!";
+        resDiv.classList.remove('hidden');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳</span> Testing...';
+      resDiv.className = "text-xs p-3 rounded-lg border bg-blue-950/50 border-blue-800/60 text-blue-300";
+      resDiv.innerHTML = 'Connecting to GitHub API...';
+      resDiv.classList.remove('hidden');
+
+      try {
+        const res = await fetch('/api/github/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo, token })
+        });
+        const data = await res.json();
+        if (data.success) {
+          resDiv.className = "text-xs p-3 rounded-lg border bg-emerald-950/60 border-emerald-700/60 text-emerald-300";
+          resDiv.innerHTML = '✅ <strong>Success!</strong> ' + data.message;
+        } else {
+          resDiv.className = "text-xs p-3 rounded-lg border bg-rose-950/60 border-rose-800/60 text-rose-300";
+          resDiv.innerHTML = '❌ <strong>Connection Error:</strong> ' + data.message;
+        }
+      } catch (e) {
+        resDiv.className = "text-xs p-3 rounded-lg border bg-rose-950/60 border-rose-800/60 text-rose-300";
+        resDiv.innerHTML = '❌ <strong>Network Error:</strong> ' + e.message;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>🔍</span> Test Connection';
+      }
+    }
+
+    function saveGitHubConfig() {
+      const repo = cleanRepoName(document.getElementById('ghRepoInput').value);
+      const token = document.getElementById('ghTokenInput').value.trim();
+      const branch = (document.getElementById('ghBranchInput').value || 'main').trim();
       if (!token) {
         alert('Please enter your GitHub Token!');
         return;
       }
+      document.getElementById('ghRepoInput').value = repo;
       localStorage.setItem('fluid_gh_repo', repo);
       localStorage.setItem('fluid_gh_token', token);
+      localStorage.setItem('fluid_gh_branch', branch);
       closeConfigModal();
       checkCloudStreamStatus();
     }
