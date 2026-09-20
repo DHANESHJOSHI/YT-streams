@@ -1,0 +1,49 @@
+name: Cloud 24/7 YouTube Live Streamer (No PC Needed)
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Direct Cloudflare R2 Video URL (e.g. https://stream.techwithjoshi.in/video/...)'
+        required: true
+        default: 'https://stream.techwithjoshi.in/video/videos/...'
+      rtmp_server:
+        description: 'YouTube RTMP Ingest Server'
+        required: true
+        default: 'rtmp://a.rtmp.youtube.com/live2'
+      stream_key:
+        description: 'YouTube Stream Key'
+        required: true
+  repository_dispatch:
+    types: [start_stream]
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Stream Video from Cloudflare R2 to YouTube Live 24/7
+        run: |
+          VIDEO_URL="${{ github.event.inputs.video_url || github.event.client_payload.video_url }}"
+          RTMP_SERVER="${{ github.event.inputs.rtmp_server || github.event.client_payload.rtmp_server || 'rtmp://a.rtmp.youtube.com/live2' }}"
+          STREAM_KEY="${{ github.event.inputs.stream_key || github.event.client_payload.stream_key }}"
+
+          if [ -z "$VIDEO_URL" ] || [ -z "$STREAM_KEY" ]; then
+            echo "Error: Video URL or Stream Key is missing."
+            exit 1
+          fi
+
+          RTMP_DEST="${RTMP_SERVER%/}/${STREAM_KEY}"
+          echo "Starting 24/7 Cloud RTMP Stream..."
+          echo "Video Source: $VIDEO_URL"
+
+          # Stream in infinite loop (-stream_loop -1) with AAC 192k audio
+          ffmpeg -re -stream_loop -1 -i "$VIDEO_URL" \
+            -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -b:v 5000k -maxrate 6500k -bufsize 12000k -g 60 \
+            -c:a aac -b:a 192k -ar 44100 \
+            -f flv -flvflags no_duration_filesize \
+            "$RTMP_DEST"

@@ -1,0 +1,17 @@
+name = "fluid-stream-worker"
+main = "worker/index.js"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+routes = [
+  { pattern = "stream.techwithjoshi.in", custom_domain = true }
+]
+
+[[r2_buckets]]
+binding = "STREAM_BUCKET"
+bucket_name = "fluid-streams"
+
+[vars]
+APP_PASSWORD = "fluidislive@2026"
+STREAM_DOMAIN = "stream.techwithjoshi.in"
